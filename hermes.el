@@ -147,7 +147,7 @@
 (cl-defmethod hermes--expandable ((data t))
   t)
 
-(cl-defgeneric hermes--expand (data))
+(cl-defgeneric hermes--expand (data) node)
 (cl-defmethod hermes--expand ((data hermes--changeset) node)
   (if (oref data files)
       (dolist (f (oref data files))
@@ -155,11 +155,8 @@
     (hermes--with-command-output "Showing revision"
       `(,@hermes--hg-commands "status" "--change" ,(oref data rev))
       (lambda (o)
-        (setf (oref data files)
-              (hermes--parse-status-files o (oref data rev)))
-        (dolist (f (oref data files))
-          (setf (oref f parent) data)
-          (ewoc-enter-after hermes--ewoc node f))))))
+        (hermes--parse-status-files data o (oref data rev))
+        (hermes--expand data node)))))
 (cl-defmethod hermes--expand ((data hermes--file) node)
   (if (oref data hunks)
       (hermes--show-file-hunks node data)
@@ -175,27 +172,33 @@
                          :lines (split-string (concat "@@" hunk) "\n")
                          :parent data))
                       (cdr (split-string o "\n@@" t))))
-        (hermes--show-file-hunks node data)))))
+        (hermes--expand data node)))))
 (cl-defmethod hermes--expand ((data hermes--shelve) node)
-  (hermes--with-command-output "Expanding shelve"
-    `(,@hermes--hg-commands "shelve" "-p" ,(oref data name))
-    (lambda (o)
-      (dolist (f (cdr (split-string o "\ndiff --git" t)))
-        (let* ((hunks (split-string f "\n@@" t))
-               (file-line (car (split-string (pop hunks) "\n")))
-               (filename (and (string-match " [ab]/\\([^ \\n]+\\)" file-line)
-                              (match-string 1 file-line)))
-               (file (hermes--file :file filename
-                                   :rev nil
-                                   :status "M"
-                                   :parent data)))
-          (setf (oref file hunks)
-                (mapcar (lambda (hunk)
-                          (hermes--hunk
-                           :lines (split-string (concat "@@" hunk) "\n")
-                           :parent file))
-                        hunks))
-          (ewoc-enter-after hermes--ewoc node file))))))
+  (if (oref data files)
+      (dolist (file (oref data files))
+        (ewoc-enter-after hermes--ewoc node file))
+    (hermes--with-command-output "Expanding shelve"
+      `(,@hermes--hg-commands "shelve" "-p" ,(oref data name))
+      (lambda (o)
+        (setf (oref data files)
+              (mapcar (lambda (f)
+                        (let* ((hunks (split-string f "\n@@" t))
+                               (file-line (car (split-string (pop hunks) "\n")))
+                               (filename (and (string-match " [ab]/\\([^ \\n]+\\)" file-line)
+                                              (match-string 1 file-line)))
+                               (file (hermes--file :file filename
+                                                   :rev nil
+                                                   :status "M"
+                                                   :parent data)))
+                          (setf (oref file hunks)
+                                (mapcar (lambda (hunk)
+                                          (hermes--hunk
+                                           :lines (split-string (concat "@@" hunk) "\n")
+                                           :parent file))
+                                        hunks))
+                          file))
+                      (cdr (split-string o "\ndiff --git" t))))
+        (hermes--expand data node)))))
 
 (cl-defgeneric hermes--visit (data))
 (cl-defmethod hermes--visit ((data hermes--changeset))
@@ -438,12 +441,14 @@ If more multiple commands are given, runs them in parallel."
       (cl-callf nreverse (oref c child-revs))))
   changesets)
 
-(defun hermes--parse-status-files (o &optional rev)
-  (mapcar (lambda (line)
-            (hermes--file :file (substring line 2)
-                          :rev rev
-                          :status (substring line 0 1)))
-          (split-string o "\n" t)))
+(defun hermes--parse-status-files (parent o &optional rev)
+  (setf (oref parent files)
+        (mapcar (lambda (line)
+                  (hermes--file :file (substring line 2)
+                                :rev rev
+                                :status (substring line 0 1)
+                                :parent parent))
+                (split-string o "\n" t))))
 
 (defun hermes--parse-shelves (o)
   (remove nil (mapcar (lambda (line)
@@ -502,7 +507,7 @@ If more multiple commands are given, runs them in parallel."
   (let* ((starting-pos (point))
          (node (ewoc-locate hermes--ewoc))
          (data (and node (ewoc-data node)))
-         (parent (and node (oref data parent)))
+         (parent (and data (oref data parent)))
          old-node)
     (while (and node (>= (cl-decf arg) 0))
       (setq old-node node
@@ -728,32 +733,26 @@ Others - filename."
               (modified (hermes--changeset
                          :title "Pending changes"
                          :rev nil
-                         :files (hermes--parse-status-files (nth 1 o) nil)
                          :expanded t))
-              (parent-files (hermes--parse-status-files (nth 2 o) "."))
               (parents (mapcar (lambda (o) (oref o rev))
                                (hermes--parse-changesets (nth 3 o))))
               (shelves (hermes--parse-shelves (nth 4 o))))
+          (hermes--parse-status-files modified (nth 1 o) nil) 
           (with-current-buffer hermes-buffer
             (let (buffer-read-only)
               (ewoc-filter hermes--ewoc (lambda (n) nil))
               (when (oref modified files)
-                (ewoc-enter-last hermes--ewoc modified)
-                (dolist (f (oref modified files))
-                  (setf (oref f parent) modified)
-                  (ewoc-enter-last hermes--ewoc f))
-                (setf (oref modified expanded) t)
+                (hermes--expand modified
+                                (ewoc-enter-last hermes--ewoc modified))
                 (ewoc-enter-last hermes--ewoc nil))
               (dolist (changeset recents)
-                (setf (oref changeset current)
-                      (cl-find (oref changeset rev) parents :test #'string=))
+                (when (cl-find (oref changeset rev) parents :test #'string=)
+                  (setf (oref changeset current) t)
+                  (setf (oref changeset expanded) t)
+                  (hermes--parse-status-files changeset (nth 2 o) "."))
                 (ewoc-enter-last hermes--ewoc changeset)
                 (when (oref changeset current)
-                  (dolist (f parent-files)
-                    (setf (oref f parent) changeset)
-                    (ewoc-enter-last hermes--ewoc f))
-                  (setf (oref changeset expanded) t)
-                  (setf (oref changeset files) parent-files)))
+                  (hermes--expand changeset (ewoc-nth hermes--ewoc -1))))
               (when (and recents shelves)
                 (ewoc-enter-last hermes--ewoc nil))
               (dolist (shelve shelves)
