@@ -147,9 +147,9 @@
 (cl-defmethod hermes--expandable ((data t))
   t)
 
-(cl-defgeneric hermes--expand (data) node)
-(cl-defmethod hermes--expand ((data hermes--changeset) node)
-  (if (oref data files)
+(cl-defgeneric hermes--expand (data) node &optional force)
+(cl-defmethod hermes--expand ((data hermes--changeset) node &optional force)
+  (if (and (oref data files) (not force))
       (dolist (f (oref data files))
         (ewoc-enter-after hermes--ewoc node f))
     (hermes--with-command-output "Showing revision"
@@ -157,8 +157,8 @@
       (lambda (o)
         (hermes--parse-status-files data o (oref data rev))
         (hermes--expand data node)))))
-(cl-defmethod hermes--expand ((data hermes--file) node)
-  (if (oref data hunks)
+(cl-defmethod hermes--expand ((data hermes--file) node &optional force)
+  (if (and (oref data hunks) (not force))
       (hermes--show-file-hunks node data)
     (hermes--with-command-output "Expanding file"
       `( ,@hermes--hg-commands "diff"
@@ -173,8 +173,8 @@
                          :parent data))
                       (cdr (split-string o "\n@@" t))))
         (hermes--expand data node)))))
-(cl-defmethod hermes--expand ((data hermes--shelve) node)
-  (if (oref data files)
+(cl-defmethod hermes--expand ((data hermes--shelve) node &optional force)
+  (if (and (oref data files) (not force))
       (dolist (file (oref data files))
         (ewoc-enter-after hermes--ewoc node file))
     (hermes--with-command-output "Expanding shelve"
@@ -540,7 +540,8 @@ If more multiple commands are given, runs them in parallel."
     (setq node (ewoc-enter-after hermes--ewoc node hunk))))
 
 (defun hermes-toggle-expand ()
-  "Expand or shrink current node."
+  "Expand or shrink current node.
+When a prefix argument is given while expanding, recompute childrens."
   (interactive)
   (setq buffer-read-only nil)
   (let* ((node (ewoc-locate hermes--ewoc))
@@ -548,7 +549,7 @@ If more multiple commands are given, runs them in parallel."
          buffer-read-only)
     (when (and data (hermes--expandable data))
       (if (cl-callf not (oref data expanded))
-          (hermes--expand data node)
+          (hermes--expand data node current-prefix-arg)
         (hermes--filter-children data)))))
 
 (defun hermes--current-data ()
