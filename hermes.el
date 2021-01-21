@@ -39,8 +39,7 @@
 (defvar hermes--log-revset "reverse(.~3::)")
 (defvar hermes--hg-commands '("hg" "--color=never" "--pager=never"))
 (defvar hermes--log-template
-  (concat "\\n"
-          "changeset: {node|short}\\n"
+  (concat "changeset: {node|short}\\n"
           "summary: {desc|firstline}\\n"
           "date: {date|isodate}\\n"
           "{parents % \"parent: {node|short}\\n\"}"
@@ -100,7 +99,6 @@
                   (propertize date 'face 'font-lock-doc-face))))
       (insert "\n"
               (hermes--indent data)
-              "  "
               (propertize (oref data summary) 'face (cons 'italic faces))))))
 (cl-defmethod hermes--print ((data hermes--file))
   (insert (hermes--indent data)
@@ -365,8 +363,7 @@ If more multiple commands are given, runs them in parallel."
         (changeset (pcase (type-of r)
                      ('hermes--file (oref r parent))
                      ('hermes--changeset r)
-                     (_ nil)))
-        parent indents)
+                     (_ nil))))
     (cond ((null changeset)
            "")
           ((hermes--shelve-p changeset)
@@ -374,23 +371,10 @@ If more multiple commands are given, runs them in parallel."
           ((oref changeset title)
            "   ")
           (t
-           (push (cond ((null for-changeset-header)
-                        "|  ")
-                       ((oref changeset current)
-                        (propertize "=> " 'face 'bold))
-                       (t
-                        "+  "))
-                 indents)
-           (setq changeset (car (oref changeset parent-revs)))
-           (while (and changeset
-                       (setq parent (car (oref changeset parent-revs))))
-             (push (if (eq changeset (car (oref parent child-revs)))
-                       "   "
-                     "|  ")
-                   indents)
-             (setq changeset parent))
-           (push "  " indents)
-           (mapconcat #'identity indents "")))))
+           (cdr (assq (cond (for-changeset-header 'indent1)
+                            ((eq r changeset)     'indent2)
+                            (t                    'indent3))
+                      (oref changeset props)))))))
 
 (defun hermes-printer (data)
   (if (null data)
@@ -401,30 +385,44 @@ If more multiple commands are given, runs them in parallel."
 (defun hermes--parse-changesets (o)
   "Parse 'hg log' output into hermes--changeset records."
   ;; --debug option may print out some garbage at the beginnig.
-  (let ((p (string-match "\nchangeset: " o)))
-    (when o
-      (setq o (substring o p))))
+  (when-let (p (string-match "\n.\s+changeset: " o))
+    (setq o (substring o (1+ p))))
   (let (changesets props)
-    (dolist (changeset-str (split-string o "\n\n" t))
-      (setq props nil)
-      (dolist (line (split-string changeset-str "\n" t))
-        (when (string-match "^\\([^:]+\\): *\\(.*\\)$" line)
-          (let* ((k (intern (match-string 1 line)))
-                 (v (match-string 2 line))
-                 (p (assq k props)))
-            (when (memq k '(changeset parent))
-              (setq v (car (nreverse (split-string v ":"))))
-              (when (string-match "^0+$" v)
-                (setq v nil)))
-            (when v
-              (if p
-                  (push v (cdr p))
-                (push (cons k (list v)) props))))))
+    (dolist (line (split-string o "\n" t))
+      ;; 'o' can be used for graphic representation
+      (when (string-match "^\\([^a-np-z]+\\)\\([a-z]+\\): +\\(.*\\)" line)
+        (let* ((indent (match-string 1 line))
+               (k (intern (match-string 2 line)))
+               (v (match-string 3 line))
+               p)
+          (when (and (eq k 'changeset)
+                     props)
+            (push (hermes--changeset :rev (cadr (assq 'changeset props))
+                                     :summary (cadr (assq 'summary props))
+                                     :tags (cdr (assq 'tag props))
+                                     :props (nreverse props))
+                  changesets)
+            (setq props nil))
+          (push (cons (cond ((eq k 'changeset) 'indent1)
+                            ((eq k 'summary)   'indent2)
+                            (t                 'indent3))
+                      indent)
+                props)
+          (when (memq k '(changeset parent))
+            (setq v (car (nreverse (split-string v ":"))))
+            (when (string-match "^0+$" v)
+              (setq v nil)))
+          (when v
+            (if (setq p (assq k props))
+                (push v (cdr p))
+              (push (cons k (list v)) props))))))
+    (when props
       (push (hermes--changeset :rev (cadr (assq 'changeset props))
                                :summary (cadr (assq 'summary props))
                                :tags (cdr (assq 'tag props))
-                               :props props)
-            changesets))
+                               :props (nreverse props))
+            changesets)
+      (setq props nil))
     (hermes--construct-hierarchy (nreverse changesets))))
 
 (defun hermes--construct-hierarchy (changesets)
@@ -724,7 +722,7 @@ Others - filename."
   (let* ((hermes-buffer (current-buffer)))
     (hermes--with-command-output "Refreshing"
       (mapcar (lambda (l) (append hermes--hg-commands l))
-              `(("log" "--debug" "-T" ,hermes--log-template "-r" ,hermes--log-revset)
+              `(("log" "--debug" "-G" "-T" ,hermes--log-template "-r" ,hermes--log-revset)
                 ("status" "--rev" ".")
                 ("status" "--change" ".")
                 ("parent")
