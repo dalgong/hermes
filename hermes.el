@@ -613,8 +613,8 @@ Others - filename."
     ("d" "Duplicate" hermes-commit-duplicate)
     ("u" "Uncommit"  hermes-commit-uncommit)]
    ["Edit HEAD"
-    ("w" "Reword"    hermes-commit-amend)
-    ("a" "Amend"     hermes-commit-reword)]])
+    ("w" "Reword"    hermes-commit-reword)
+    ("a" "Amend"     hermes-commit-amend)]])
 (defun hermes-commit-duplicate ()
   "Create a duplicate change."
   (interactive)
