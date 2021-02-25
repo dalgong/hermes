@@ -26,7 +26,7 @@
 
 (require 'ewoc)
 
-(require 'deferred)
+(require 'aio)
 (require 'transient)
 (require 'with-editor)
 
@@ -269,27 +269,41 @@
       #'hermes-refresh)))
 
 ;; process invocation
+(defun aio-start-file-process (command &rest args)
+  (let* ((buf (generate-new-buffer (format " *aio[%s-%s]*" command args)))
+         (proc (apply #'start-file-process command buf command args))
+         (promise (aio-promise)))
+    (prog1 promise
+      (setf (process-sentinel proc)
+            (lambda (proc event)
+              (when (memq (process-status proc) '(exit signal))
+                (let ((s (with-current-buffer buf (prog1 (buffer-string) (kill-buffer buf)))))
+                  (aio-resolve promise (lambda () s)))))))))
 (defun hermes--with-command-output (name command-and-args callback)
   "Run command(s) and feed the output to callback.
 If more multiple commands are given, runs them in parallel."
   (declare (indent 1))
-  (let ((reporter (and name (make-progress-reporter name))))
-    (deferred:$
-      (if (listp (car command-and-args))
-          (let* ((d default-directory)
-                 (lambdas (mapcar (lambda (c)
-                                    (lambda ()
-                                      (let ((default-directory d))
-                                        (apply #'deferred:file-process c))))
-                                  command-and-args)))
-            (apply #'deferred:parallel lambdas))
-        (apply #'deferred:file-process command-and-args))
-      (deferred:nextc it callback)
+  (unless (listp (car command-and-args))
+    (setq command-and-args (list command-and-args)))
+  (let* ((i 0)
+         (reporter (and name (make-progress-reporter name 0 (length command-and-args))))
+         (d default-directory))
+    (aio-with-async
+      (funcall callback
+               ;; (cl-loop for c in (mapcar (lambda (c)
+               ;;                             (let ((default-directory d))
+               ;;                               (apply #'aio-start-file-process c)))
+               ;;                           command-and-args)
+               ;;          collect (prog1 (aio-await c)
+               ;;                    (progress-reporter-update reporter (incf i))))
+
+               (cl-loop for c in command-and-args
+                        collect (prog1 (aio-await (let ((default-directory d))
+                                                    (apply #'aio-start-file-process c)))
+                                  (progress-reporter-update reporter (incf i))))
+               )
       (when reporter
-        (deferred:nextc it (lambda (_) (progress-reporter-done reporter)))))))
-(unless (fboundp 'deferred:file-process)
-  (defun deferred:file-process (command &rest args)
-    (deferred:process-gen 'start-file-process command args)))
+        (progress-reporter-done reporter)))))
 
 (defun hermes--term-sentinel (proc event)
   (when (memq (process-status proc) '(exit signal))
@@ -310,7 +324,7 @@ If more multiple commands are given, runs them in parallel."
                   ,@(when tramp-ssh-controlmaster-options
                       (split-string tramp-ssh-controlmaster-options nil t))
                   "-t"
-                  ,@(when (tramp-file-name-user v) 
+                  ,@(when (tramp-file-name-user v)
                       (list "-l" (tramp-file-name-user v)))
                   (tramp-file-name-host-port v)
                   "--")
@@ -446,7 +460,7 @@ If more multiple commands are given, runs them in parallel."
                                 :rev rev
                                 :status (substring line 0 1)
                                 :parent parent))
-                (split-string o "\n" t))))
+                (split-string (ansi-color-filter-apply o) "\n" t))))
 
 (defun hermes--parse-shelves (o)
   (remove nil (mapcar (lambda (line)
@@ -728,6 +742,7 @@ Others - filename."
                 ("parent")
                 ("shelve" "--list")))
       (lambda (o)
+        (message "o: %s" o)
         (let ((recents (hermes--parse-changesets (nth 0 o)))
               (modified (hermes--changeset
                          :title "Pending changes"
@@ -736,7 +751,7 @@ Others - filename."
               (parents (mapcar (lambda (o) (oref o rev))
                                (hermes--parse-changesets (nth 3 o))))
               (shelves (hermes--parse-shelves (nth 4 o))))
-          (hermes--parse-status-files modified (nth 1 o) nil) 
+          (hermes--parse-status-files modified (nth 1 o) nil)
           (with-current-buffer hermes-buffer
             (let (buffer-read-only)
               (ewoc-filter hermes--ewoc (lambda (n) nil))
