@@ -283,25 +283,22 @@
   "Run command(s) and feed the output to callback.
 If more multiple commands are given, runs them in parallel."
   (declare (indent 1))
-  (unless (listp (car command-and-args))
-    (setq command-and-args (list command-and-args)))
-  (let* ((i 0)
-         (reporter (and name (make-progress-reporter name 0 (length command-and-args))))
+  (let* ((reporter (and name (make-progress-reporter name)))
          (d default-directory))
     (aio-with-async
-      (funcall callback
-               ;; (cl-loop for c in (mapcar (lambda (c)
-               ;;                             (let ((default-directory d))
-               ;;                               (apply #'aio-start-file-process c)))
-               ;;                           command-and-args)
-               ;;          collect (prog1 (aio-await c)
-               ;;                    (progress-reporter-update reporter (incf i))))
+      (let ((default-directory d))
+        (funcall callback
+                 ;; (cl-loop for c in (mapcar (lambda (c)
+                 ;;                             (let ((default-directory d))
+                 ;;                               (apply #'aio-start-file-process c)))
+                 ;;                           command-and-args)
+                 ;;          collect (prog1 (aio-await c)
+                 ;;                    (progress-reporter-update reporter (incf i))))
 
-               (cl-loop for c in command-and-args
-                        collect (prog1 (aio-await (let ((default-directory d))
-                                                    (apply #'aio-start-file-process c)))
-                                  (progress-reporter-update reporter (incf i))))
-               )
+                 (if (listp (car command-and-args))
+                     (cl-loop for c in command-and-args
+                              collect (aio-await (apply #'aio-start-file-process c)))
+                   (aio-await (apply #'aio-start-file-process command-and-args)))))
       (when reporter
         (progress-reporter-done reporter)))))
 
@@ -627,8 +624,8 @@ Others - filename."
     ("d" "Duplicate" hermes-commit-duplicate)
     ("u" "Uncommit"  hermes-commit-uncommit)]
    ["Edit HEAD"
-    ("w" "Reword"    hermes-commit-reword)
-    ("a" "Amend"     hermes-commit-amend)]])
+    ("w" "Reword"    hermes-commit-amend)
+    ("a" "Amend"     hermes-commit-reword)]])
 (defun hermes-commit-duplicate ()
   "Create a duplicate change."
   (interactive)
