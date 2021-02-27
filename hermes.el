@@ -26,7 +26,7 @@
 
 (require 'ewoc)
 
-(require 'deferred)
+(require 'aio)
 (require 'transient)
 (require 'with-editor)
 
@@ -269,27 +269,32 @@
       #'hermes-refresh)))
 
 ;; process invocation
+(defun aio-start-file-process (command &rest args)
+  (let* ((buf (generate-new-buffer (format " *aio[%s-%s]*" command args)))
+         (proc (apply #'start-file-process command buf command args))
+         (promise (aio-promise)))
+    (prog1 promise
+      (setf (process-sentinel proc)
+            (lambda (proc event)
+              (when (memq (process-status proc) '(exit signal))
+                (let ((s (with-current-buffer buf (prog1 (buffer-string) (kill-buffer buf)))))
+                  (aio-resolve promise (lambda () s)))))))))
 (defun hermes--with-command-output (name command-and-args callback)
   "Run command(s) and feed the output to callback.
 If more multiple commands are given, runs them in parallel."
   (declare (indent 1))
-  (let ((reporter (and name (make-progress-reporter name))))
-    (deferred:$
-      (if (listp (car command-and-args))
-          (let* ((d default-directory)
-                 (lambdas (mapcar (lambda (c)
-                                    (lambda ()
-                                      (let ((default-directory d))
-                                        (apply #'deferred:file-process c))))
-                                  command-and-args)))
-            (apply #'deferred:parallel lambdas))
-        (apply #'deferred:file-process command-and-args))
-      (deferred:nextc it callback)
+  (let* ((reporter (and name (make-progress-reporter name)))
+         (d default-directory))
+    (aio-with-async
+      (let ((default-directory d))
+        (funcall callback
+                 (if (not (listp (car command-and-args)))
+                     (aio-await (apply #'aio-start-file-process command-and-args))
+                   (cl-loop for p in (mapcar (lambda (c) (apply #'aio-start-file-process c))
+                                             command-and-args)
+                            collect (aio-await p)))))
       (when reporter
-        (deferred:nextc it (lambda (_) (progress-reporter-done reporter)))))))
-(unless (fboundp 'deferred:file-process)
-  (defun deferred:file-process (command &rest args)
-    (deferred:process-gen 'start-file-process command args)))
+        (progress-reporter-done reporter)))))
 
 (defun hermes--term-sentinel (proc event)
   (when (memq (process-status proc) '(exit signal))
@@ -310,7 +315,7 @@ If more multiple commands are given, runs them in parallel."
                   ,@(when tramp-ssh-controlmaster-options
                       (split-string tramp-ssh-controlmaster-options nil t))
                   "-t"
-                  ,@(when (tramp-file-name-user v) 
+                  ,@(when (tramp-file-name-user v)
                       (list "-l" (tramp-file-name-user v)))
                   (tramp-file-name-host-port v)
                   "--")
@@ -446,7 +451,7 @@ If more multiple commands are given, runs them in parallel."
                                 :rev rev
                                 :status (substring line 0 1)
                                 :parent parent))
-                (split-string o "\n" t))))
+                (split-string (ansi-color-filter-apply o) "\n" t))))
 
 (defun hermes--parse-shelves (o)
   (remove nil (mapcar (lambda (line)
@@ -605,6 +610,7 @@ Others - filename."
   "Create a new commit or replace an existing commit."
   ["Arguments"
    ("-A" "mark new/missing files as added/removed" ("-A" "--addremove"))
+   ("-e" "prompt to edit the commit message"       ("-e" "--edit"))
    ("-s" "use the secret phase for committing"     ("-s" "--secret"))
    ("-n" "do not keep empty commit after uncommit" ("-n" "--no-keep"))
    ("-i" "use interactive mode"                    ("-i" "--interactive"))]
@@ -613,7 +619,6 @@ Others - filename."
     ("d" "Duplicate" hermes-commit-duplicate)
     ("u" "Uncommit"  hermes-commit-uncommit)]
    ["Edit HEAD"
-    ("w" "Reword"    hermes-commit-reword)
     ("a" "Amend"     hermes-commit-amend)]])
 (defun hermes-commit-duplicate ()
   "Create a duplicate change."
@@ -641,7 +646,7 @@ Others - filename."
                                   (member "--interactive" args)))
                              form))
                      (cons 'progn form))))
-  (def "commit" "amend" "reword"))
+  (def "commit" "amend"))
 
 (transient-define-prefix hermes-phase ()
   "Set or show the current phase name."
@@ -736,7 +741,7 @@ Others - filename."
               (parents (mapcar (lambda (o) (oref o rev))
                                (hermes--parse-changesets (nth 3 o))))
               (shelves (hermes--parse-shelves (nth 4 o))))
-          (hermes--parse-status-files modified (nth 1 o) nil) 
+          (hermes--parse-status-files modified (nth 1 o) nil)
           (with-current-buffer hermes-buffer
             (let (buffer-read-only)
               (ewoc-filter hermes--ewoc (lambda (n) nil))
