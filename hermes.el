@@ -159,10 +159,12 @@
   (if (and (oref data hunks) (not force))
       (hermes--show-file-hunks node data)
     (hermes--with-command-output "Expanding file"
-      `( ,@hermes--hg-commands "diff"
-         ,@(append (and (oref data rev)
-                        (list "--change" (oref data rev)))
-                   (list (oref data file))))
+      (if (string= "?" (oref data status))
+          `("diff" "-u" "/dev/null" ,(oref data file))
+        `( ,@hermes--hg-commands "diff"
+           ,@(append (and (oref data rev)
+                          (list "--change" (oref data rev)))
+                     (list (oref data file)))))
       (lambda (o)
         (setf (oref data hunks)
               (mapcar (lambda (hunk)
