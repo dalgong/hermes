@@ -228,10 +228,17 @@
 
 (cl-defgeneric hermes--revert (data))
 (cl-defmethod hermes--revert ((data hermes--changeset))
-  (when (y-or-n-p (format "Strip changeset %s? " (oref data rev)))
+  (when (and (oref data rev) (y-or-n-p (format "Strip changeset %s? " (oref data rev))))
     (hermes--with-command-output (format "Stripping changeset %s..." (oref data rev))
       `( ,@hermes--hg-commands
          "strip" "--rev" ,(oref data rev))
+      #'hermes-refresh))
+  (when (and (null (oref data rev)) (y-or-n-p "Revert pending changes? "))
+    (hermes--with-command-output "Revert pending changes..."
+      `((,@hermes--hg-commands "update" "-C" ".")
+        ("rm" "-f" ,@(mapcar (lambda (d) (oref d file))
+                             (remove-if-not (lambda (d) (string= "?" (oref d status)))
+                                            (oref data files)))))
       #'hermes-refresh)))
 (cl-defmethod hermes--revert ((data hermes--file))
   (when (y-or-n-p (format "Revert %s? " (oref data file)))
