@@ -642,6 +642,19 @@ Others - filename."
     `("bash" "-c" ,(concat (mapconcat #'identity hermes--hg-commands " ") command))
     nil nil t))
 
+(defun hermes-addremove ()
+  "Add or remove files."
+  (interactive)
+  (let* ((data (hermes--current-data))
+         (changeset (if (hermes--file-p data) (oref data parent) data)))
+    (unless (and (hermes--changeset-p changeset)
+                 (null (oref changeset rev)))
+      (error "Not a pending changes."))
+    (hermes--run-hg-command (format "Add/remove files...")
+      "addremove"
+      #'hermes-refresh
+      (unless (eq data changeset)
+        (hermes--item-string data)))))
 (transient-define-prefix hermes-commit ()
   "Create a new commit or replace an existing commit."
   ["Arguments"
@@ -731,6 +744,7 @@ Others - filename."
     (define-key map "g" #'revert-buffer)
     (define-key map (kbd "TAB") #'hermes-toggle-expand)
     (define-key map (kbd "RET") #'hermes-visit)
+    (define-key map "a" #'hermes-addremove)
     (define-key map "c" #'hermes-commit)
     (define-key map ":" #'hermes-run-hg)
     (define-key map "v" #'hermes-phase)
