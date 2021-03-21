@@ -279,7 +279,8 @@
 
 ;; process invocation
 (defun aio-start-file-process (command &rest args)
-  (let* ((buf (generate-new-buffer (format " *aio[%s-%s]*" command args)))
+  (let* ((process-connection-type nil)
+         (buf (generate-new-buffer (format " *aio[%s-%s]*" command args)))
          (proc (apply #'start-file-process command buf command args))
          (promise (aio-promise)))
     (prog1 promise
@@ -289,21 +290,23 @@
                 (let ((s (with-current-buffer buf (prog1 (buffer-string) (kill-buffer buf)))))
                   (aio-resolve promise (lambda () s)))))))))
 (defun hermes--with-command-output (name command-and-args callback)
-  "Run command(s) and feed the output to callback.
+  "Run command and feed the output to callback.
 If more multiple commands are given, runs them in parallel."
   (declare (indent 1))
-  (let* ((reporter (and name (make-progress-reporter name)))
-         (d default-directory))
+  (let ((reporter (and name (make-progress-reporter name)))
+        proc)
     (aio-with-async
-      (let ((default-directory d))
-        (funcall callback
-                 (if (not (listp (car command-and-args)))
-                     (aio-await (apply #'aio-start-file-process command-and-args))
-                   (cl-loop for p in (mapcar (lambda (c) (apply #'aio-start-file-process c))
-                                             command-and-args)
-                            collect (aio-await p)))))
+      (condition-case err
+          (setq proc (apply #'aio-start-file-process command-and-args))
+          (funcall callback (aio-await proc))
+        (error
+         (message "hermes error: %s" err)))
       (when reporter
         (progress-reporter-done reporter)))))
+
+(defun hermes--run-hg (command &rest args)
+  (apply #'aio-start-file-process
+         `(,@hermes--hg-commands ,command ,@args)))
 
 (defun hermes--term-sentinel (proc event)
   (when (memq (process-status proc) '(exit signal))
@@ -396,7 +399,7 @@ If more multiple commands are given, runs them in parallel."
     (hermes--print data)))
 
 ;; parsers
-(defun hermes--parse-changesets (o)
+(defun hermes--parse-changesets (o &optional parents)
   "Parse 'hg log' output into hermes--changeset records."
   ;; --debug option may print out some garbage at the beginnig.
   (when-let (p (string-match "\n.\s+changeset: " o))
@@ -414,7 +417,10 @@ If more multiple commands are given, runs them in parallel."
             (push (hermes--changeset :rev (cadr (assq 'changeset props))
                                      :summary (cadr (assq 'summary props))
                                      :tags (cdr (assq 'tag props))
-                                     :props (nreverse props))
+                                     :props (nreverse props)
+                                     :current (cl-find (cadr (assq 'changeset props))
+                                                       parents
+                                                       :test #'string=))
                   changesets)
             (setq props nil))
           (push (cons (cond ((eq k 'changeset) 'indent1)
@@ -583,14 +589,14 @@ File - opens the file. With prefix argument, opens it on other window."
   (interactive)
   (hermes--visit (hermes--current-data)))
 
-(defun hermes-shelve (message)
+(aio-defun hermes-shelve (message)
   "Create shelve.
 With prefix argument, keep changes in the working directory."
   (interactive "sShelve message: ")
-  (hermes--with-command-output "shelve"
-    `( ,@hermes--hg-commands "shelve"
-       ,@(when current-prefix-arg (list "-k")) "-m" ,message)
-    #'hermes-refresh))
+  (aio-await
+   (apply #'hermes--run-hg "shelve" "-m" message
+          (when current-prefix-arg (list "-k"))))
+  (hermes-refresh))
 
 (defun hermes-kill ()
   "Kill current node into the kill ring.
@@ -599,8 +605,9 @@ Others - filename."
   (interactive)
   (let (buffer-read-only)
     (when-let (data (hermes--current-data))
-      (message "Copied %s "
-               (kill-new (hermes--item-string data))))))
+      (let ((s (hermes--item-string data)))
+       (kill-new s)
+       (message "Copied %s" s )))))
 
 (defun hermes-revert ()
   "Revert changes under the point."
@@ -629,20 +636,19 @@ Others - filename."
     ("u" "Uncommit"  hermes-commit-uncommit)]
    ["Edit HEAD"
     ("a" "Amend"     hermes-commit-amend)]])
-(defun hermes-commit-duplicate ()
+(aio-defun hermes-commit-duplicate ()
   "Create a duplicate change."
   (interactive)
-  (hermes--with-command-output (format "Duplicating %s" (hermes--current-rev-or-error))
-    `(,@hermes--hg-commands
-      "graft" "-f" "-r" ,(hermes--current-rev-or-error))
-    #'hermes-refresh))
-(defun hermes-commit-uncommit (&optional args)
+  (let ((rev (hermes--current-rev-or-error)))
+    (message "Duplicating %s" rev)
+    (aio-await (hermes--run-hg "graft" "-f" "-r" rev))
+    (hermes-refresh)))
+(aio-defun hermes-commit-uncommit (&optional args)
   "Create a duplicate change."
   (interactive (list (transient-args 'hermes-commit)))
-  (hermes--with-command-output "Uncommitting"
-    `(,@hermes--hg-commands
-      "uncommit" "--allow-dirty-working-copy" ,@args)
-    #'hermes-refresh))
+  (aio-await (apply #'hermes--run-hg "uncommit" "--allow-dirty-working-copy"
+                    @args))
+  (hermes-refresh))
 (cl-macrolet ((def (&rest cmds)
                    (let (form)
                      (dolist (cmd cmds)
@@ -667,17 +673,16 @@ Others - filename."
     ("p" "set changeset phase to public" hermes-phase-public)
     ("d" "set changeset phase to draft"  hermes-phase-draft)
     ("s" "set changeset phase to secret" hermes-phase-secret)]])
-(defun hermes-phase-show ()
+(aio-defun hermes-phase-show ()
   "Show the phase of the current changeset."
   (interactive)
-  (hermes--with-command-output nil
-    `(,@hermes--hg-commands "phase" "-r" ,(hermes--current-rev-or-error))
-    (lambda (o)
-      (message "Changeset %s is in %s phase."
-               (propertize (hermes--current-rev-or-error)
-                           'face '('font-lock-type-face bold))
-               (propertize (substring (cadr (split-string o ": " t)) 0 -1)
-                           'face 'bold)))))
+  (let* ((rev (hermes--current-rev-or-error))
+         (o (aio-await (hermes--run-hg "phase" "-r" rev))))
+    (message "Changeset %s is in %s phase."
+             (propertize (hermes--current-rev-or-error)
+                         'face '('font-lock-type-face bold))
+             (propertize (substring (cadr (split-string o ": " t)) 0 -1)
+                         'face 'bold))))
 (cl-macrolet ((def (&rest cmds)
                    (let (form)
                      (dolist (cmd cmds)
@@ -731,45 +736,50 @@ Others - filename."
   (setq buffer-read-only t)
   (hl-line-mode 1))
 
-(defun hermes-refresh (&rest args)
+(aio-defun hermes-refresh (&rest args)
   "Refresh *hermes* buffer contents."
-  (let* ((hermes-buffer (current-buffer)))
-    (hermes--with-command-output "Refreshing"
-      (mapcar (lambda (l) (append hermes--hg-commands l))
-              `(("log" "--debug" "-G" "-T" ,hermes--log-template "-r" ,hermes--log-revset)
-                ("status" "--rev" ".")
-                ("status" "--change" ".")
-                ("parent")
-                ("shelve" "--list")))
-      (lambda (o)
-        (let ((recents (hermes--parse-changesets (nth 0 o)))
-              (modified (hermes--changeset
-                         :title "Pending changes"
-                         :rev nil
-                         :expanded t))
-              (parents (mapcar (lambda (o) (oref o rev))
-                               (hermes--parse-changesets (nth 3 o))))
-              (shelves (hermes--parse-shelves (nth 4 o))))
-          (hermes--parse-status-files modified (nth 1 o) nil)
-          (with-current-buffer hermes-buffer
-            (let (buffer-read-only)
-              (ewoc-filter hermes--ewoc (lambda (n) nil))
-              (when (oref modified files)
-                (hermes--expand modified
-                                (ewoc-enter-last hermes--ewoc modified))
-                (ewoc-enter-last hermes--ewoc nil))
-              (dolist (changeset recents)
-                (when (cl-find (oref changeset rev) parents :test #'string=)
-                  (setf (oref changeset current) t)
-                  (setf (oref changeset expanded) t)
-                  (hermes--parse-status-files changeset (nth 2 o) "."))
-                (ewoc-enter-last hermes--ewoc changeset)
-                (when (oref changeset current)
-                  (hermes--expand changeset (ewoc-nth hermes--ewoc -1))))
-              (when (and recents shelves)
-                (ewoc-enter-last hermes--ewoc nil))
-              (dolist (shelve shelves)
-                (ewoc-enter-last hermes--ewoc shelve)))))))))
+  (let* ((hermes-buffer (current-buffer))
+         (reporter (make-progress-reporter "Refreshing..."))
+         (modified (hermes--changeset
+                    :title "Pending changes"
+                    :rev nil
+                    :expanded t)))
+    (with-current-buffer hermes-buffer
+      (let (buffer-read-only)
+        (ewoc-filter hermes--ewoc (lambda (n) nil))))
+
+    (hermes--parse-status-files
+     modified
+     (aio-await (hermes--run-hg "status")))
+    (when (oref modified files)
+      (with-current-buffer hermes-buffer
+        (let (buffer-read-only)
+          (hermes--expand modified
+                          (ewoc-enter-last hermes--ewoc modified)))))
+    (when-let (recents (hermes--parse-changesets
+                        (aio-await (hermes--run-hg "log" "--debug" "-G"
+                                                   "-T" hermes--log-template
+                                                   "-r" hermes--log-revset))
+                        (mapcar (lambda (o) (oref o rev))
+                                (hermes--parse-changesets
+                                 (aio-await (hermes--run-hg "parent"))))))
+      (with-current-buffer hermes-buffer
+        (let (buffer-read-only)
+          (when (and (ewoc-nth hermes--ewoc -1)
+                     (ewoc-data (ewoc-nth hermes--ewoc -1)))
+            (ewoc-enter-last hermes--ewoc nil))
+          (dolist (changeset recents)
+            (ewoc-enter-last hermes--ewoc changeset)))))
+    (when-let (shelves (hermes--parse-shelves
+                        (aio-await (hermes--run-hg "shelve" "--list"))))
+      (with-current-buffer hermes-buffer
+        (let (buffer-read-only)
+          (when (and (ewoc-nth hermes--ewoc -1)
+                     (ewoc-data (ewoc-nth hermes--ewoc -1)))
+            (ewoc-enter-last hermes--ewoc nil))
+          (dolist (shelve shelves)
+            (ewoc-enter-last hermes--ewoc shelve)))))
+    (progress-reporter-done reporter)))
 
 ;;;###autoload (autoload 'hermes "hermes" nil t)
 (defun hermes (&optional directory)
