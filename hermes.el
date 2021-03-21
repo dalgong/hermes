@@ -159,25 +159,25 @@
 (cl-defmethod hermes--expand ((data hermes--file) node &optional force)
   (if (and (oref data hunks) (not force))
       (hermes--show-file-hunks node data)
-    (let ((callback (lambda (o)
-                      (setf (oref data hunks)
-                            (mapcar (lambda (hunk)
-                                      (hermes--hunk
-                                       :lines (split-string (concat "@@" hunk) "\n")
-                                       :parent data))
-                                    (cdr (split-string o "\n@@" t))))
-                      (hermes--expand data node))))
-     (if (string= "?" (oref data status))
-        (hermes--async-command "Expanding file"
+    (let* ((callback (lambda (o)
+                       (setf (oref data hunks)
+                             (mapcar (lambda (hunk)
+                                       (hermes--hunk
+                                        :lines (split-string (concat "@@" hunk) "\n")
+                                        :parent data))
+                                     (cdr (split-string o "\n@@" t))))
+                       (hermes--expand data node))))
+      (if (string= "?" (oref data status))
+          (hermes--async-command "Expanding file"
+            "diff"
+            callback
+            "-u" "/dev/null" (oref data file))
+        (hermes--run-hg-command "Expanding file"
           "diff"
           callback
-          "-u" "/dev/null" (oref data file))
-       (hermes--run-hg-command "Expanding file"
-         "diff"
-         callback
-         (when (oref data rev) "--change")
-         (when (oref data rev) (oref data rev))
-         (oref data file))))))
+          (when (oref data rev) "--change")
+          (when (oref data rev) (oref data rev))
+          (oref data file))))))
 (cl-defmethod hermes--expand ((data hermes--shelve) node &optional force)
   (if (and (oref data files) (not force))
       (dolist (file (oref data files))
@@ -290,17 +290,41 @@
       "-d" (oref data name))))
 
 ;; process invocation
+(defun hermes--may-rewrite-for-remote (command-and-args &optional need-terminal)
+  (if (tramp-tramp-file-p default-directory)
+      (let ((v (tramp-dissect-file-name default-directory)))
+        (cons "/" `("ssh"
+                    ,@(when tramp-ssh-controlmaster-options
+                        (split-string tramp-ssh-controlmaster-options nil t))
+                    ,@(when need-terminal (list "-t"))
+                    ,@(when (tramp-file-name-user v)
+                        (list "-l" (tramp-file-name-user v)))
+                    ,(tramp-file-name-host-port v)
+                    "--"
+                    ,(format "cd %s; %s"
+                             (file-local-name default-directory)
+                             (mapconcat #'identity (mapcar #'tramp-shell-quote-argument command-and-args) " ")))))
+    (cons default-directory command-and-args)))
+
 (defun hermes--async-command (name command callback &rest args)
   "Run command and feed the output to callback.
 If more multiple commands are given, runs them in parallel."
   (declare (indent 1))
-  (let ((reporter (and name (make-progress-reporter name))))
+  (let* ((reporter (and name (make-progress-reporter name)))
+         (command-and-args (hermes--may-rewrite-for-remote (cons command args)))
+         (default-directory (pop command-and-args))
+         (buf (current-buffer)))
+    (setq name (or name command))
+    (setq command (pop command-and-args))
+    (setq args command-and-args)
     (apply #'async-start-process
            (or name command)
            command
            (lambda (_)
              (condition-case err
-                 (funcall callback (buffer-string))
+                 (let ((output (buffer-string)))
+                   (with-current-buffer buf
+                     (funcall callback output)))
                (error
                 (message "hermes command error: %s" err)))
              (when reporter
@@ -329,34 +353,20 @@ If more multiple commands are given, runs them in parallel."
         (progress-reporter-done reporter)))))
 (advice-add #'term-sentinel :after 'hermes--term-sentinel)
 
-(defun hermes--convert-to-remote-terminal-commands (command-and-args)
-  (if (tramp-tramp-file-p default-directory)
-      (let ((v (tramp-dissect-file-name default-directory)))
-        (append `("ssh"
-                  ,@(when tramp-ssh-controlmaster-options
-                      (split-string tramp-ssh-controlmaster-options nil t))
-                  "-t"
-                  ,@(when (tramp-file-name-user v)
-                      (list "-l" (tramp-file-name-user v)))
-                  (tramp-file-name-host-port v)
-                  "--")
-                command-and-args))
-    command-and-args))
-
 (defun hermes--run-interactive-command (name command-and-args &optional callback require-terminal show)
   "Run a command and call callback with the buffer after it is done."
   (declare (indent 1))
   (with-editor
     (let* ((reporter (and name (make-progress-reporter name)))
+           (command-and-args (hermes--may-rewrite-for-remote command-and-args require-terminal))
+           (default-directory (pop command-and-args))
            (buffer-name (generate-new-buffer-name (format "*hermes-command[%s]*" name)))
            (buffer (if require-terminal
-                       (progn
-                         (setq command-and-args (hermes--convert-to-remote-terminal-commands command-and-args))
-                         (apply #'term-ansi-make-term
-                                buffer-name
-                                (car command-and-args)
-                                nil
-                                (cdr command-and-args)))
+                       (apply #'term-ansi-make-term
+                              buffer-name
+                              (car command-and-args)
+                              nil
+                              (cdr command-and-args))
                      (process-buffer (apply #'start-file-process
                                             name
                                             buffer-name
