@@ -306,6 +306,16 @@
                              (mapconcat #'identity (mapcar #'tramp-shell-quote-argument command-and-args) " ")))))
     (cons default-directory command-and-args)))
 
+(defvar hermes--async-last-command-proc)
+(put 'hermes--async-last-command-proc 'permanent-local t)
+
+(defun hermes-show-last-command ()
+  (interactive)
+  (and hermes--async-last-command-proc
+       (process-buffer hermes--async-last-command-proc)
+       (buffer-live-p (process-buffer hermes--async-last-command-proc))
+       (display-buffer (process-buffer hermes--async-last-command-proc))))
+
 (defun hermes--async-command (name command callback &rest args)
   "Run command and feed the output to callback.
 If more multiple commands are given, runs them in parallel."
@@ -317,19 +327,20 @@ If more multiple commands are given, runs them in parallel."
     (setq name (or name command))
     (setq command (pop command-and-args))
     (setq args command-and-args)
-    (apply #'async-start-process
-           (or name command)
-           command
-           (lambda (_)
-             (condition-case err
-                 (let ((output (buffer-string)))
-                   (with-current-buffer buf
-                     (funcall callback output)))
-               (error
-                (message "hermes command error: %s" err)))
-             (when reporter
-               (progress-reporter-done reporter)))
-           (cl-remove-if-not #'identity args))))
+    (setq hermes--async-last-command-proc
+          (apply #'async-start-process
+                 (or name command)
+                 command
+                 (lambda (_)
+                   (condition-case err
+                       (let ((output (buffer-string)))
+                         (with-current-buffer buf
+                           (funcall callback output)))
+                     (error
+                      (message "hermes command error: %s" err)))
+                   (when reporter
+                     (progress-reporter-done reporter)))
+                 (cl-remove-if-not #'identity args)))))
 
 (defun hermes--run-hg-command (name command callback &rest args)
   (declare (indent 1))
@@ -385,6 +396,7 @@ If more multiple commands are given, runs them in parallel."
 
 ;; printers
 (defvar hermes--ewoc nil)
+(put 'hermes--ewoc 'permanent-local t)
 (defun hermes--filter-children (data)
   (let ((deleted (list data)))
     (ewoc-filter hermes--ewoc
@@ -742,6 +754,7 @@ Others - filename."
   (let ((map (make-sparse-keymap)))
     (suppress-keymap map)
     (define-key map "g" #'revert-buffer)
+    (define-key map "$" #'hermes-show-last-command)
     (define-key map (kbd "TAB") #'hermes-toggle-expand)
     (define-key map (kbd "RET") #'hermes-visit)
     (define-key map "a" #'hermes-addremove)
