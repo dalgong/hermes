@@ -797,7 +797,7 @@ Others - filename."
 
 (defun hermes-refresh (&rest _)
   "Refresh *hermes* buffer contents."
-  (when (eq 'major-mode 'hermes-mode)
+  (when (eq major-mode 'hermes-mode)
     (let* ((hermes-buffer (current-buffer))
            (reporter (make-progress-reporter "Refreshing..."))
            (modified (hermes--changeset
