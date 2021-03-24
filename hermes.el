@@ -283,12 +283,12 @@
                   (append (oref data lines) '(""))
                   "\n")
        nil temp-file)
-      (hermes--run-hg-command "Reverting hunk"
+      (hermes--async-command "Reverting hunk"
         "patch"
         (lambda (_)
           (delete-file temp-file)
           (hermes-refresh))
-        "--unified" "--reverse" "--batch" "--input" ,temp-file "--" (oref data file)))))
+        "--unified" "--reverse" "--batch" "--input" temp-file "--" (oref (oref data parent) file)))))
 (cl-defmethod hermes--revert ((data hermes--shelve))
   (when (y-or-n-p (format "Delete %s? " (oref data name)))
     (hermes--run-hg-command (format "Deleting shelve %s" (oref data name))
