@@ -237,37 +237,44 @@
 
 (cl-defgeneric hermes--revert (data))
 (cl-defmethod hermes--revert ((data hermes--changeset))
-  (when (and (oref data rev) (y-or-n-p (format "Strip changeset %s? " (oref data rev))))
-    (hermes--run-hg-command (format "Stripping changeset %s..." (oref data rev))
-      "strip"
-      #'hermes-refresh
-      "--rev" (oref data rev)))
-  (when (and (null (oref data rev)) (y-or-n-p "Revert pending changes? "))
-    (if-let (files (mapcar (lambda (d) (oref d file))
-                           (remove-if-not (lambda (d) (string= "?" (oref d status)))
-                                          (oref data files))))
-        (hermes--async-command nil
-          "rm"
-          (lambda (_)
-            (hermes--run-hg-command "Revert pending changes..."
-              "update"
-              #'hermes-refresh
-              "-C" "."))
-          "-f" files)
-      (hermes--run-hg-command "Revert pending changes..."
-        "update"
-        #'hermes-refresh
-        "-C" "."))))
+  (cond ((and (oref data rev) (y-or-n-p (format "Strip changeset %s? " (oref data rev))))
+         (hermes--run-hg-command (format "Stripping changeset %s..." (oref data rev))
+           "strip"
+           #'hermes-refresh
+           "--rev" (oref data rev)))
+        ((and (null (oref data rev)) (y-or-n-p "Revert pending changes? "))
+         (if-let (files (mapcar (lambda (d) (oref d file))
+                                (remove-if-not (lambda (d) (string= "?" (oref d status)))
+                                               (oref data files))))
+             (hermes--async-command nil
+               "rm"
+               (lambda (_)
+                 (hermes--run-hg-command "Revert pending changes..."
+                   "update"
+                   #'hermes-refresh
+                   "-C" "."))
+               "-f" files)
+           (hermes--run-hg-command "Revert pending changes..."
+             "update"
+             #'hermes-refresh
+             "-C" ".")))))
 (cl-defmethod hermes--revert ((data hermes--file))
-  (when (y-or-n-p (format "Revert %s? " (oref data file)))
-    (let ((parent (oref data parent)))
-      (hermes--run-hg-command "Reverting file"
-        "revert"
-        #'hermes-refresh
-        (when (null (oref parent title)) "--rev")
-        (when (null (oref parent title)) (oref parent rev)))
-      "--"
-      (oref data file))))
+  (let ((parent (oref data parent)))
+    (cond ((and (string= "?" (oref data status))
+                (y-or-n-p (format "Delete %s? " (oref data file))))
+           (hermes--async-command nil
+             "rm"
+             #'hermes-refresh
+             "-f" (oref data file)))
+          ((and (not (string= "?" (oref data status)))
+                (y-or-n-p (format "Revert %s? " (oref data file))))
+           (hermes--run-hg-command "Reverting file"
+             "revert"
+             #'hermes-refresh
+             (when (oref parent rev) "--rev")
+             (when (oref parent rev) (oref parent rev))
+             "--"
+             (oref data file))))))
 (cl-defmethod hermes--revert ((data hermes--hunk))
   (when (y-or-n-p "Revert hunk? ")
     (let ((temp-file (make-nearby-temp-file "hunk" nil ".patch")))
@@ -306,15 +313,14 @@
                              (mapconcat #'identity (mapcar #'tramp-shell-quote-argument command-and-args) " ")))))
     (cons default-directory command-and-args)))
 
-(defvar hermes--async-last-command-proc)
-(put 'hermes--async-last-command-proc 'permanent-local t)
+(defvar hermes--async-last-command-buffer nil)
+(put 'hermes--async-last-command-buffer 'permanent-local t)
 
 (defun hermes-show-last-command ()
   (interactive)
-  (and hermes--async-last-command-proc
-       (process-buffer hermes--async-last-command-proc)
-       (buffer-live-p (process-buffer hermes--async-last-command-proc))
-       (display-buffer (process-buffer hermes--async-last-command-proc))))
+  (and hermes--async-last-command-buffer
+       (buffer-live-p hermes--async-last-command-buffer)
+       (display-buffer hermes--async-last-command-buffer)))
 
 (defun hermes--async-command (name command callback &rest args)
   "Run command and feed the output to callback.
@@ -327,7 +333,7 @@ If more multiple commands are given, runs them in parallel."
     (setq name (or name command))
     (setq command (pop command-and-args))
     (setq args command-and-args)
-    (setq hermes--async-last-command-proc
+    (setq hermes--async-last-command-buffer
           (apply #'async-start-process
                  (or name command)
                  command
