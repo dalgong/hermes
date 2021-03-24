@@ -797,53 +797,54 @@ Others - filename."
 
 (defun hermes-refresh (&rest _)
   "Refresh *hermes* buffer contents."
-  (let* ((hermes-buffer (current-buffer))
-         (reporter (make-progress-reporter "Refreshing..."))
-         (modified (hermes--changeset
-                    :title "Pending changes"
-                    :rev nil
-                    :expanded t))
-         recents parents shelves)
-    (with-current-buffer hermes-buffer
-      (let (buffer-read-only)
-        (ewoc-filter hermes--ewoc (lambda (_) nil))))
+  (when (eq 'major-mode 'hermes-mode)
+    (let* ((hermes-buffer (current-buffer))
+           (reporter (make-progress-reporter "Refreshing..."))
+           (modified (hermes--changeset
+                      :title "Pending changes"
+                      :rev nil
+                      :expanded t))
+           recents parents shelves)
+      (with-current-buffer hermes-buffer
+        (let (buffer-read-only)
+          (ewoc-filter hermes--ewoc (lambda (_) nil))))
 
-    (dolist (a (list
-                (hermes--run-hg-command nil
-                  "status"
-                  (lambda (o) (hermes--parse-status-files modified o)))
-                (hermes--run-hg-command nil
-                  "parent"
-                  (lambda (o) (setq parents (mapcar (lambda (o) (oref o rev))
-                                                    (hermes--parse-changesets o)))))
-                (hermes--run-hg-command nil
-                  "shelve"
-                  (lambda (o) (setq shelves (hermes--parse-shelves o)))
-                  "--list")
-                (hermes--run-hg-command nil
-                  "log"
-                  (lambda (o) (setq recents (hermes--parse-changesets o)))
-                  "--debug" "-G"
-                  "-T" hermes--log-template
-                  "-r" hermes--log-revset)))
-      (async-wait a))
-    (dolist (changeset recents)
-      (when (cl-find (oref changeset rev) parents :test #'string=)
-        (setf (oref changeset current) t)))
-    (with-current-buffer hermes-buffer
-      (let (buffer-read-only)
-        (when (oref modified files)
-          (hermes--expand modified (ewoc-enter-last hermes--ewoc modified))
-          (ewoc-enter-last hermes--ewoc nil))
-        (when recents
-          (dolist (changeset recents)
-            (ewoc-enter-last hermes--ewoc changeset))
+      (dolist (a (list
+                  (hermes--run-hg-command nil
+                    "status"
+                    (lambda (o) (hermes--parse-status-files modified o)))
+                  (hermes--run-hg-command nil
+                    "parent"
+                    (lambda (o) (setq parents (mapcar (lambda (o) (oref o rev))
+                                                      (hermes--parse-changesets o)))))
+                  (hermes--run-hg-command nil
+                    "shelve"
+                    (lambda (o) (setq shelves (hermes--parse-shelves o)))
+                    "--list")
+                  (hermes--run-hg-command nil
+                    "log"
+                    (lambda (o) (setq recents (hermes--parse-changesets o)))
+                    "--debug" "-G"
+                    "-T" hermes--log-template
+                    "-r" hermes--log-revset)))
+        (async-wait a))
+      (dolist (changeset recents)
+        (when (cl-find (oref changeset rev) parents :test #'string=)
+          (setf (oref changeset current) t)))
+      (with-current-buffer hermes-buffer
+        (let (buffer-read-only)
+          (when (oref modified files)
+            (hermes--expand modified (ewoc-enter-last hermes--ewoc modified))
+            (ewoc-enter-last hermes--ewoc nil))
+          (when recents
+            (dolist (changeset recents)
+              (ewoc-enter-last hermes--ewoc changeset))
+            (when shelves
+              (ewoc-enter-last hermes--ewoc nil)))
           (when shelves
-            (ewoc-enter-last hermes--ewoc nil)))
-        (when shelves
-          (dolist (shelve shelves)
-            (ewoc-enter-last hermes--ewoc shelve)))))
-    (progress-reporter-done reporter)))
+            (dolist (shelve shelves)
+              (ewoc-enter-last hermes--ewoc shelve)))))
+      (progress-reporter-done reporter))))
 
 ;;;###autoload (autoload 'hermes "hermes" nil t)
 (defun hermes (&optional directory)
