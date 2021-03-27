@@ -259,22 +259,37 @@
              #'hermes-refresh
              "-C" ".")))))
 (cl-defmethod hermes--revert ((data hermes--file))
-  (let ((parent (oref data parent)))
-    (cond ((and (string= "?" (oref data status))
-                (y-or-n-p (format "Delete %s? " (oref data file))))
-           (hermes--async-command nil
-             "rm"
-             #'hermes-refresh
-             "-f" (oref data file)))
-          ((and (not (string= "?" (oref data status)))
-                (y-or-n-p (format "Revert %s? " (oref data file))))
-           (hermes--run-hg-command "Reverting file"
-             "revert"
-             #'hermes-refresh
-             (when (oref parent rev) "--rev")
-             (when (oref parent rev) (oref parent rev))
-             "--"
-             (oref data file))))))
+  (let ((parent (oref data parent))
+        (file (oref data file)))
+    (when (y-or-n-p (format "Revert %s? " file))
+      (cond ((string= "?" (oref data status))
+             (hermes--async-command nil
+               "rm"
+               #'hermes-refresh
+               "-f" file))
+            ((or (null (oref parent rev))
+                 current-prefix-arg)
+             (hermes--run-hg-command "Reverting back"
+               "revert"
+               #'hermes-refresh
+               (when (oref parent rev) (concat "--rev=" (oref parent rev) "^"))
+               "--" file))
+            (t
+             (hermes--run-hg-command nil
+               "diff"
+               (lambda (o)
+                 (let ((temp-file (make-nearby-temp-file "hunk" nil ".patch")))
+                   (write-region o nil temp-file)
+                   (hermes--async-command "Reverting hunk"
+                     "patch"
+                     (lambda (_)
+                       (delete-file temp-file)
+                       (hermes-refresh))
+                     "--unified" "--reverse" "--batch"
+                     "--input" temp-file
+                     "--" file)))
+               "-c" (oref parent rev)
+               file))))))
 (cl-defmethod hermes--revert ((data hermes--hunk))
   (when (y-or-n-p "Revert hunk? ")
     (let ((temp-file (make-nearby-temp-file "hunk" nil ".patch")))
