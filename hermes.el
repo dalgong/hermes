@@ -688,6 +688,27 @@ Others - filename."
       #'hermes-refresh
       (unless (eq data changeset)
         (hermes--item-string data)))))
+
+(defun hermes-show-revision ()
+  "Show revision details."
+  (interactive)
+  (let ((data (hermes--current-data)))
+    (while (and data (not (hermes--changeset-p data)))
+      (setq data (oref data parent)))
+    (when-let (rev (and (oref data rev)))
+      (hermes--run-hg-command (format "showing %s" rev)
+        "log"
+        (lambda (o)
+          (with-current-buffer (get-buffer-create (format "*hermes-show[%s]*" rev))
+            (setq buffer-read-only nil)
+            (erase-buffer)
+            (insert o)
+            (goto-char (point-min))
+            (diff-mode)
+            (view-mode 1)
+            (display-buffer (current-buffer))))
+        "-p" "--stat" "-r" rev))))
+
 (transient-define-prefix hermes-commit ()
   "Create a new commit or replace an existing commit."
   ["Arguments"
@@ -780,6 +801,7 @@ Others - filename."
     (define-key map (kbd "RET") #'hermes-visit)
     (define-key map "a" #'hermes-addremove)
     (define-key map "c" #'hermes-commit)
+    (define-key map "d" #'hermes-show-revision)
     (define-key map ":" #'hermes-run-hg)
     (define-key map "v" #'hermes-phase)
     (define-key map "w" #'hermes-kill)
