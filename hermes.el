@@ -732,7 +732,7 @@ Others - filename."
       #'hermes-refresh
       "-f" "-r" rev)))
 (defun hermes-commit-uncommit (&optional args)
-  "Create a duplicate change."
+  "Uncommit a change."
   (interactive (list (transient-args 'hermes-commit)))
   (apply #'hermes--run-hg-command nil
          "uncommit"
