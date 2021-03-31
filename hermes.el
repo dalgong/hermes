@@ -41,7 +41,7 @@
 (defvar hermes--log-template
   (concat "changeset: {node|short}\\n"
           "summary: {desc|firstline}\\n"
-          "date: {date|isodate}\\n"
+          "date: {date|age}\\n"
           "{parents % \"parent: {node|short}\\n\"}"
           "{tags % \"tag: {tag}\\n\"}"))
 
@@ -732,7 +732,7 @@ Others - filename."
       #'hermes-refresh
       "-f" "-r" rev)))
 (defun hermes-commit-uncommit (&optional args)
-  "Uncommit a change."
+  "Create a duplicate change."
   (interactive (list (transient-args 'hermes-commit)))
   (apply #'hermes--run-hg-command nil
          "uncommit"
@@ -883,15 +883,17 @@ Others - filename."
               (ewoc-enter-last hermes--ewoc shelve)))))
       (progress-reporter-done reporter))))
 
+(defun hermes-read-root-dir ()
+  "read root dir"
+  (let ((d (vc-find-root default-directory ".hg")))
+    (when (or current-prefix-arg (null d))
+      (setq d (vc-find-root
+               (read-directory-name "HG repository directory: ") ".hg")))
+    (list d)))
 ;;;###autoload (autoload 'hermes "hermes" nil t)
 (defun hermes (&optional directory)
   "Starts a *hermes* buffer on current directory."
-  (interactive
-   (let ((d (vc-find-root default-directory ".hg")))
-     (when (or current-prefix-arg (null d))
-       (setq d (vc-find-root
-                (read-directory-name "HG repository directory: ") ".hg")))
-     (list d)))
+  (interactive (hermes-read-root-dir))
   (unless (or directory
               (setq directory (vc-find-root default-directory ".hg")))
     (error "No HG repository found!"))
