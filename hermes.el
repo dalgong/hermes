@@ -403,8 +403,8 @@ If more multiple commands are given, runs them in parallel."
                                             name
                                             buffer-name
                                             command-and-args))))
-           proc)
-      (setq proc (get-buffer-process buffer))
+           (proc (get-buffer-process buffer)))
+      (setq hermes--async-last-command-buffer buffer)
       (if require-terminal
           (with-current-buffer buffer
             (term-mode)
