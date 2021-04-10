@@ -667,6 +667,39 @@ Others - filename."
   (interactive)
   (hermes--revert (hermes--current-data)))
 
+(defun hermes--current-changeset ()
+  (let ((data (hermes--current-data)))
+    (while (and data (not (hermes--changeset-p data)))
+      (setq data (oref data parent)))
+    data))
+
+(defun hermes--all-changeset ()
+  (let (changesets)
+    (ewoc-map
+     (lambda (data)
+       (when (and (hermes--changeset-p data) (oref data rev))
+         (push data changesets)))
+     hermes--ewoc)
+    (nreverse changesets)))
+
+(defun hermes-rebase (rev)
+  "Rebase chhange under the point to a revision."
+  (interactive
+   (let* ((changes (hermes--all-changeset))
+          (revs (mapcar (lambda (c)
+                          (concat (oref c rev) ": " (oref c summary)))
+                        (remove (hermes--current-changeset) changes)))
+          (chosen (completing-read "Rebase to: " revs nil t)))
+     (list (car (split-string chosen ":")))))
+  (let ((current-rev (oref (hermes--current-changeset) rev)))
+    (unless current-rev
+      (error "Not on a revision."))
+   (hermes--run-interactive-command (format "Rebase: %s -> %s"
+                                            current-rev rev)
+     `(,@hermes--hg-commands
+       "rebase" "--rev" current-rev "--dest" rev)
+     #'hermes-refresh)))
+
 (defvar hermes-run-hg-history nil)
 (defun hermes-run-hg (command)
   "Run arbitrary hg command."
@@ -692,9 +725,7 @@ Others - filename."
 (defun hermes-show-revision ()
   "Show revision details."
   (interactive)
-  (let ((data (hermes--current-data)))
-    (while (and data (not (hermes--changeset-p data)))
-      (setq data (oref data parent)))
+  (let ((data (hermes--current-changeset)))
     (when-let (rev (and (oref data rev)))
       (hermes--run-hg-command (format "showing %s" rev)
         "log"
@@ -807,6 +838,7 @@ Others - filename."
     (define-key map "w" #'hermes-kill)
     (define-key map "z" #'hermes-shelve)
     (define-key map "k" #'hermes-revert)
+    (define-key map "r" #'hermes-rebase)
     (define-key map "n" #'hermes-goto-next)
     (define-key map "p" #'hermes-goto-prev)
     (define-key map (kbd "M-n") #'hermes-goto-next-same-level)
