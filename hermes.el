@@ -682,22 +682,26 @@ Others - filename."
      hermes--ewoc)
     (nreverse changesets)))
 
-(defun hermes-rebase (rev)
-  "Rebase chhange under the point to a revision."
-  (interactive
-   (let* ((changes (hermes--all-changeset))
-          (revs (mapcar (lambda (c)
-                          (concat (oref c rev) ": " (oref c summary)))
-                        (remove (hermes--current-changeset) changes)))
-          (chosen (completing-read "Rebase to: " revs nil t)))
-     (list (car (split-string chosen ":")))))
-  (let ((current-rev (oref (hermes--current-changeset) rev)))
-    (unless current-rev
+(defun hermes-graft ()
+  "Graft change under the point to current revision"
+  (interactive)
+  (let ((rev (oref (hermes--current-changeset) rev)))
+    (unless rev
       (error "Not on a revision."))
-   (hermes--run-interactive-command (format "Rebase: %s -> %s"
-                                            current-rev rev)
+    (hermes--run-interactive-command (format "Grafting %s" rev)
+      `(,@hermes--hg-commands
+        "graft" "--rev" dest)
+      #'hermes-refresh)))
+
+(defun hermes-rebase (rev)
+  "Rebase current revision to the change under the point."
+  (interactive)
+  (let ((dest (oref (hermes--current-changeset) rev)))
+    (unless dest
+      (error "Not on a revision."))
+   (hermes--run-interactive-command (format "Rebase to %s" dest)
      `(,@hermes--hg-commands
-       "rebase" "--rev" current-rev "--dest" rev)
+       "rebase" "--rev" "." "--dest" dest)
      #'hermes-refresh)))
 
 (defvar hermes-run-hg-history nil)
@@ -838,6 +842,7 @@ Others - filename."
     (define-key map "w" #'hermes-kill)
     (define-key map "z" #'hermes-shelve)
     (define-key map "k" #'hermes-revert)
+    (define-key map "i" #'hermes-graft)
     (define-key map "r" #'hermes-rebase)
     (define-key map "n" #'hermes-goto-next)
     (define-key map "p" #'hermes-goto-prev)
