@@ -690,7 +690,7 @@ Others - filename."
       (error "Not on a revision."))
     (hermes--run-interactive-command (format "Grafting %s" rev)
       `(,@hermes--hg-commands
-        "graft" "--rev" ,dest)
+        "graft" "--rev" ,rev)
       #'hermes-refresh)))
 
 (defun hermes-rebase ()
