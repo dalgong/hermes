@@ -690,10 +690,10 @@ Others - filename."
       (error "Not on a revision."))
     (hermes--run-interactive-command (format "Grafting %s" rev)
       `(,@hermes--hg-commands
-        "graft" "--rev" dest)
+        "graft" "--rev" ,dest)
       #'hermes-refresh)))
 
-(defun hermes-rebase (rev)
+(defun hermes-rebase ()
   "Rebase current revision to the change under the point."
   (interactive)
   (let ((dest (oref (hermes--current-changeset) rev)))
@@ -701,7 +701,7 @@ Others - filename."
       (error "Not on a revision."))
    (hermes--run-interactive-command (format "Rebase to %s" dest)
      `(,@hermes--hg-commands
-       "rebase" "--rev" "." "--dest" dest)
+       "rebase" "--rev" "." "--dest" ,dest)
      #'hermes-refresh)))
 
 (defvar hermes-run-hg-history nil)
@@ -732,7 +732,7 @@ Others - filename."
   (let ((data (hermes--current-changeset)))
     (when-let (rev (and (oref data rev)))
       (hermes--run-hg-command (format "showing %s" rev)
-        "log"
+        "show"
         (lambda (o)
           (with-current-buffer (get-buffer-create (format "*hermes-show[%s]*" rev))
             (setq buffer-read-only nil)
@@ -742,7 +742,7 @@ Others - filename."
             (diff-mode)
             (view-mode 1)
             (display-buffer (current-buffer))))
-        "-p" "--stat" "-r" rev))))
+        "-g" rev))))
 
 (transient-define-prefix hermes-commit ()
   "Create a new commit or replace an existing commit."
