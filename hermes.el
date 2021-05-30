@@ -312,22 +312,6 @@
       "-d" (oref data name))))
 
 ;; process invocation
-(defun hermes--may-rewrite-for-remote (command-and-args &optional need-terminal)
-  (if (tramp-tramp-file-p default-directory)
-      (let ((v (tramp-dissect-file-name default-directory)))
-        (cons "/" `("ssh"
-                    ,@(when tramp-ssh-controlmaster-options
-                        (split-string tramp-ssh-controlmaster-options nil t))
-                    ,@(when need-terminal (list "-t"))
-                    ,@(when (tramp-file-name-user v)
-                        (list "-l" (tramp-file-name-user v)))
-                    ,(tramp-file-name-host-port v)
-                    "--"
-                    ,(format "cd %s; %s"
-                             (file-local-name default-directory)
-                             (mapconcat #'identity (mapcar #'tramp-shell-quote-argument command-and-args) " ")))))
-    (cons default-directory command-and-args)))
-
 (defvar hermes--async-last-command-buffer nil)
 (put 'hermes--async-last-command-buffer 'permanent-local t)
 
@@ -342,8 +326,7 @@
 If more multiple commands are given, runs them in parallel."
   (declare (indent 1))
   (let* ((reporter (and name (make-progress-reporter name)))
-         (command-and-args (hermes--may-rewrite-for-remote (cons command args)))
-         (default-directory (pop command-and-args))
+         (command-and-args (cons command args))
          (buf (current-buffer)))
     (setq name (or name command))
     (setq command (pop command-and-args))
@@ -390,8 +373,6 @@ If more multiple commands are given, runs them in parallel."
   (declare (indent 1))
   (with-editor
     (let* ((reporter (and name (make-progress-reporter name)))
-           (command-and-args (hermes--may-rewrite-for-remote command-and-args require-terminal))
-           (default-directory (pop command-and-args))
            (buffer-name (generate-new-buffer-name (format "*hermes-command[%s]*" name)))
            (buffer (if require-terminal
                        (apply #'term-ansi-make-term
