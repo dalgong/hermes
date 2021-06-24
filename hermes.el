@@ -934,22 +934,29 @@ Others - filename."
   (unless (or directory
               (setq directory (vc-find-root default-directory ".hg")))
     (error "No HG repository found!"))
-  (let* ((default-directory directory)
-         (rpaths (nreverse (split-string directory "/" t)))
+  (let* ((rpaths (nreverse (split-string directory "/" t)))
          (name (car rpaths))
-         (refresh (>= (prefix-numeric-value current-prefix-arg) 16)))
-    (while (and (get-buffer (format "*hermes[%s]*" name))
-                (not (string= default-directory
+         (refresh (>= (prefix-numeric-value current-prefix-arg) 16))
+         buffer)
+    (dolist (b (buffer-list))
+      (when (and (null buffer)
+                 (eq 'hermes-mode (buffer-local-value 'major-mode b))
+                 (string= directory (buffer-local-value 'default-directory b)))
+        (setq buffer b)))
+    (while (and (null buffer)
+                (get-buffer (format "*hermes[%s]*" name))
+                (not (string= directory
                               (buffer-local-value 'default-directory
                                                   (get-buffer (format "*hermes[%s]*" name))))))
       (setq name (concat name "|" (pop rpaths))))
-    (with-current-buffer (get-buffer-create (format "*hermes[%s]*" name))
-      (display-buffer (current-buffer))
-      (unless (derived-mode-p 'hermes-mode)
-        (setq refresh t)
-        (hermes-mode))
-      (when refresh
-        (hermes-refresh)))))
+    (let ((default-directory directory))
+      (with-current-buffer (or buffer (get-buffer-create (format "*hermes[%s]*" name)))
+        (display-buffer (current-buffer))
+        (unless (derived-mode-p 'hermes-mode)
+          (setq refresh t)
+          (hermes-mode))
+        (when refresh
+          (hermes-refresh))))))
 
 (provide 'hermes)
 ;;; hermes.el ends here
