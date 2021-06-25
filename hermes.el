@@ -935,7 +935,7 @@ Others - filename."
               (setq directory (vc-find-root default-directory ".hg")))
     (error "No HG repository found!"))
   (let* ((rpaths (nreverse (split-string directory "/" t)))
-         (name (car rpaths))
+         (name (pop rpaths))
          (refresh (>= (prefix-numeric-value current-prefix-arg) 16))
          buffer)
     (dolist (b (buffer-list))
