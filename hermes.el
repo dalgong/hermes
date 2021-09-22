@@ -62,6 +62,7 @@
   ((file        :initarg :file)
    (rev         :initarg :rev)
    (status      :initarg :status)
+   (marked      :initarg :marked      :initform nil)
    (hunks       :initarg :hunks       :initform nil)))
 (defclass hermes--hunk (hermes--base)
   ((lines       :initarg :lines)))
@@ -103,7 +104,9 @@
 (cl-defmethod hermes--print ((data hermes--file))
   (insert (hermes--indent data)
           "  " (propertize (oref data status) 'face 'font-lock-keyword-face) " "
-          (oref data file)))
+          (if (oref data marked)
+              (propertize (oref data file) 'face 'underline)
+              (oref data file))))
 (cl-defmethod hermes--print ((data hermes--hunk))
   (let* ((hunk-header (car (oref data lines)))
          (line-num (and (string-match
@@ -321,6 +324,18 @@
        (buffer-live-p hermes--async-last-command-buffer)
        (display-buffer hermes--async-last-command-buffer)))
 
+
+(defun async-start-file-process (name program finish-func &rest program-args)
+  (let* ((buf (generate-new-buffer (concat "*" name "*")))
+         (proc (let ((process-connection-type nil))
+                 (apply #'start-file-process name buf program program-args))))
+    (with-current-buffer buf
+      (set (make-local-variable 'async-callback) finish-func)
+      (set-process-sentinel proc #'async-when-done)
+      (unless (string= name "emacs")
+        (set (make-local-variable 'async-callback-for-process) t))
+      proc)))
+
 (defun hermes--async-command (name command callback &rest args)
   "Run command and feed the output to callback.
 If more multiple commands are given, runs them in parallel."
@@ -332,7 +347,7 @@ If more multiple commands are given, runs them in parallel."
     (setq command (pop command-and-args))
     (setq args command-and-args)
     (setq hermes--async-last-command-buffer
-          (apply #'async-start-process
+          (apply #'async-start-file-process
                  (or name command)
                  command
                  (lambda (_)
@@ -725,6 +740,63 @@ Others - filename."
             (display-buffer (current-buffer))))
         "-g" rev))))
 
+(defun hermes-mark-unmark ()
+  "Toggle the mark of a file."
+  (interactive)
+  (let ((node (ewoc-locate hermes--ewoc))
+        (data (hermes--current-data)))
+    (when (hermes--hunk-p data)
+      (setq data (oref data parent))
+      (while (and node (not (eq data (ewoc-data node))) )
+        (setq node (ewoc-prev hermes--ewoc node))))
+    (cond ((hermes--file-p data)
+           (cl-callf not (oref data marked))
+           (ewoc-invalidate hermes--ewoc node))
+          ((or (hermes--changeset-p data)
+               (hermes--shelve-p data))
+           (when (and (hermes--expandable data)
+                      (not (oref data expanded)))
+             (hermes-toggle-expand))
+           (mapcar (lambda (file)
+                     (cl-callf not (oref file marked)))
+                   (oref data files))
+           (setq node (ewoc-next hermes--ewoc node))
+           (while (and node
+                       (ewoc-data node)
+                       (eq data (oref (ewoc-data node) parent)))
+             (ewoc-invalidate hermes--ewoc node)
+             (setq node (ewoc-next hermes--ewoc node)))))))
+
+(defun hermes-unmark-all ()
+  "Unmark all files."
+  (interactive)
+  (dolist (data (hermes--marked-files))
+    (cl-callf not (oref data marked)))
+  (save-excursion
+    (ewoc-refresh hermes--ewoc)))
+
+(defun hermes--marked-files ()
+  "Return all marked file objects."
+  (let (datas)
+    (ewoc-map (lambda (data)
+                (cond ((and (hermes--file-p data) (oref data marked))
+                       (cl-pushnew data datas :test #'eq))
+                      ((and (or (hermes--changeset-p data)
+                                (hermes--shelve-p data))
+                            (not (oref data expanded)))
+                       (mapcar (lambda (file)
+                                 (when (and (hermes--file-p file) (oref file marked))
+                                   (cl-pushnew file datas :test #'eq)))
+                               (oref data files)))))
+              hermes--ewoc)
+    datas))
+
+(defun hermes--marked-filenames ()
+  "Return all marked file names."
+  (cl-remove-duplicates
+   (mapcar (lambda (data) (oref data file)) (hermes--marked-files))
+   :test #'string-equal))
+
 (transient-define-prefix hermes-commit ()
   "Create a new commit or replace an existing commit."
   ["Arguments"
@@ -735,6 +807,7 @@ Others - filename."
    ("-i" "use interactive mode"                    ("-i" "--interactive"))]
   [["Create"
     ("c" "Commit"    hermes-commit-commit)
+    ("s" "abSorb"    hermes-commit-absorb)
     ("d" "Duplicate" hermes-commit-duplicate)
     ("u" "Uncommit"  hermes-commit-uncommit)]
    ["Edit HEAD"
@@ -747,6 +820,13 @@ Others - filename."
       "graft"
       #'hermes-refresh
       "-f" "-r" rev)))
+(defun hermes-commit-absorb (&optional args)
+  (interactive)
+  (apply #'hermes--run-hg-command nil
+         "absorb"
+         #'hermes-refresh
+         "--apply-changes"
+         (hermes--marked-filenames)))
 (defun hermes-commit-uncommit (&optional args)
   "Create a duplicate change."
   (interactive (list (transient-args 'hermes-commit)))
@@ -754,7 +834,7 @@ Others - filename."
          "uncommit"
          #'hermes-refresh
          "--allow-dirty-working-copy"
-         args))
+         (hermes--marked-filenames)))
 (cl-macrolet ((def (&rest cmds)
                    (let (form)
                      (dolist (cmd cmds)
@@ -764,7 +844,8 @@ Others - filename."
                                 (hermes--run-interactive-command ,cmd
                                   (append hermes--hg-commands (cons ,cmd args))
                                   #'hermes-refresh
-                                  (member "--interactive" args)))
+                                  (append (member "--interactive" args)
+                                          (hermes--marked-filenames))))
                              form))
                      (cons 'progn form))))
   (def "commit" "amend"))
@@ -818,6 +899,8 @@ Others - filename."
     (define-key map "a" #'hermes-addremove)
     (define-key map "c" #'hermes-commit)
     (define-key map "d" #'hermes-show-revision)
+    (define-key map "m" #'hermes-mark-unmark)
+    (define-key map "u" #'hermes-unmark-all)
     (define-key map ":" #'hermes-run-hg)
     (define-key map "v" #'hermes-phase)
     (define-key map "w" #'hermes-kill)
