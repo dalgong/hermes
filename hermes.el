@@ -842,10 +842,9 @@ Others - filename."
                                 ,(concat "Run hg " cmd ".")
                                 (interactive (list (transient-args 'hermes-commit)))
                                 (hermes--run-interactive-command ,cmd
-                                  (append hermes--hg-commands (cons ,cmd args))
+                                  (append hermes--hg-commands (cons ,cmd (append args (hermes--marked-filenames))))
                                   #'hermes-refresh
-                                  (append (member "--interactive" args)
-                                          (hermes--marked-filenames))))
+                                  (member "--interactive" args)))
                              form))
                      (cons 'progn form))))
   (def "commit" "amend"))
