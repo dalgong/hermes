@@ -47,7 +47,8 @@
 
 (defclass hermes--base ()
   ((parent      :initarg :parent      :initform nil)
-   (expanded    :initarg :expanded    :initform nil)))
+   (expanded    :initarg :expanded    :initform nil)
+   (node        :initarg :node        :initform nil)))
 (defclass hermes--changeset (hermes--base)
   ((title       :initarg :title       :initform nil)
    (rev         :initarg :rev         :initform nil)
@@ -152,7 +153,8 @@
 (cl-defmethod hermes--expand ((data hermes--changeset) node &optional force)
   (if (and (oref data files) (not force))
       (dolist (f (oref data files))
-        (ewoc-enter-after hermes--ewoc node f))
+        (setf (oref f node)
+              (ewoc-enter-after hermes--ewoc node f)))
     (hermes--run-hg-command "Showing revision"
       "status"
       (lambda (o)
@@ -184,7 +186,8 @@
 (cl-defmethod hermes--expand ((data hermes--shelve) node &optional force)
   (if (and (oref data files) (not force))
       (dolist (file (oref data files))
-        (ewoc-enter-after hermes--ewoc node file))
+        (setf (oref file node)
+              (ewoc-enter-after hermes--ewoc node file)))
     (hermes--run-hg-command "Expanding shelve"
       "shelve"
       (lambda (o)
@@ -243,7 +246,7 @@
   (cond ((and (oref data rev) (y-or-n-p (format "Strip changeset %s? " (oref data rev))))
          (hermes--run-hg-command (format "Stripping changeset %s..." (oref data rev))
            "strip"
-           #'hermes-refresh
+           #'ignore
            "--rev" (oref data rev)))
         ((and (null (oref data rev)) (y-or-n-p "Revert pending changes? "))
          (if-let (files (mapcar (lambda (d) (oref d file))
@@ -254,12 +257,12 @@
                (lambda (_)
                  (hermes--run-hg-command "Revert pending changes..."
                    "update"
-                   #'hermes-refresh
+                   #'ignore
                    "-C" "."))
                "-f" files)
            (hermes--run-hg-command "Revert pending changes..."
              "update"
-             #'hermes-refresh
+             #'ignore
              "-C" ".")))))
 (cl-defmethod hermes--revert ((data hermes--file))
   (let ((parent (oref data parent))
@@ -268,13 +271,13 @@
       (cond ((string= "?" (oref data status))
              (hermes--async-command nil
                "rm"
-               #'hermes-refresh
+               #'ignore
                "-f" file))
             ((or (null (oref parent rev))
                  current-prefix-arg)
              (hermes--run-hg-command "Reverting back"
                "revert"
-               #'hermes-refresh
+               #'ignore
                (when (oref parent rev) (concat "--rev=" (oref parent rev) "^"))
                "--" file))
             (t
@@ -286,8 +289,7 @@
                    (hermes--async-command "Reverting hunk"
                      "patch"
                      (lambda (_)
-                       (delete-file temp-file)
-                       (hermes-refresh))
+                       (delete-file temp-file))
                      "--unified" "--reverse" "--batch"
                      "--input" temp-file
                      "--" file)))
@@ -304,14 +306,13 @@
       (hermes--async-command "Reverting hunk"
         "patch"
         (lambda (_)
-          (delete-file temp-file)
-          (hermes-refresh))
+          (delete-file temp-file))
         "--unified" "--reverse" "--batch" "--input" temp-file "--" (oref (oref data parent) file)))))
 (cl-defmethod hermes--revert ((data hermes--shelve))
   (when (y-or-n-p (format "Delete %s? " (oref data name)))
     (hermes--run-hg-command (format "Deleting shelve %s" (oref data name))
       "shelve"
-      #'hermes-refresh
+      #'ignore
       "-d" (oref data name))))
 
 ;; process invocation
@@ -421,7 +422,9 @@ If more multiple commands are given, runs them in parallel."
                    (not (and d
                              (memq (oref d parent) deleted)
                              (or (setf (oref d expanded) nil)
-                                 (push d deleted))))))))
+                                 (push d deleted))))))
+    (dolist (d deleted)
+      (setf (oref d node) nil))))
 
 (defun hermes--indent (r &optional for-changeset-header)
   (let ((changeset (pcase (type-of r)
@@ -602,7 +605,8 @@ If more multiple commands are given, runs them in parallel."
 
 (defun hermes--show-file-hunks (node file)
   (dolist (hunk (oref file hunks))
-    (setq node (ewoc-enter-after hermes--ewoc node hunk))))
+    (setq node (setf (oref hunk node)
+                     (ewoc-enter-after hermes--ewoc node hunk)))))
 
 (defun hermes-toggle-expand ()
   "Expand or shrink current node.
@@ -842,9 +846,10 @@ Others - filename."
                                 ,(concat "Run hg " cmd ".")
                                 (interactive (list (transient-args 'hermes-commit)))
                                 (hermes--run-interactive-command ,cmd
-                                  (append hermes--hg-commands (cons ,cmd (append args (hermes--marked-filenames))))
+                                  (append hermes--hg-commands (cons ,cmd args))
                                   #'hermes-refresh
-                                  (member "--interactive" args)))
+                                  (append (member "--interactive" args)
+                                          (hermes--marked-filenames))))
                              form))
                      (cons 'progn form))))
   (def "commit" "amend"))
@@ -971,16 +976,19 @@ Others - filename."
       (with-current-buffer hermes-buffer
         (let (buffer-read-only)
           (when (oref modified files)
-            (hermes--expand modified (ewoc-enter-last hermes--ewoc modified))
+            (hermes--expand modified (setf (oref modified node)
+                                           (ewoc-enter-last hermes--ewoc modified)))
             (ewoc-enter-last hermes--ewoc nil))
           (when recents
             (dolist (changeset recents)
-              (ewoc-enter-last hermes--ewoc changeset))
+              (setf (oref changeset node)
+                    (ewoc-enter-last hermes--ewoc changeset)))
             (when shelves
               (ewoc-enter-last hermes--ewoc nil)))
           (when shelves
             (dolist (shelve shelves)
-              (ewoc-enter-last hermes--ewoc shelve)))))
+              (setf (oref shelve node)
+                    (ewoc-enter-last hermes--ewoc shelve))))))
       (progress-reporter-done reporter))))
 
 (defun hermes-read-root-dir ()
