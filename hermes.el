@@ -726,6 +726,16 @@ Others - filename."
       (unless (eq data changeset)
         (hermes--item-string data)))))
 
+(defun hermes-goto-head-revision ()
+  "Jump to current revision."
+  (interactive)
+  (ewoc-map (lambda (data)
+              (when (and (hermes--changeset-p data)
+                         (oref data current))
+                (goto-char (ewoc--node-start-marker (oref data node)))
+                (cl-return-from hermes-goto-head-revision)))
+            hermes--ewoc))
+
 (defun hermes-show-revision ()
   "Show revision details."
   (interactive)
@@ -899,6 +909,7 @@ Others - filename."
     (define-key map "$" #'hermes-show-last-command)
     (define-key map (kbd "TAB") #'hermes-toggle-expand)
     (define-key map (kbd "RET") #'hermes-visit)
+    (define-key map "." #'hermes-goto-head-revision)
     (define-key map "a" #'hermes-addremove)
     (define-key map "c" #'hermes-commit)
     (define-key map "d" #'hermes-show-revision)
