@@ -301,11 +301,11 @@
                (lambda (o)
                  (let ((temp-file (make-nearby-temp-file "hunk" nil ".patch")))
                    (write-region o nil temp-file)
-                   (hermes--async-command (if revert "Reverting hunk" "Applying hunk")
+                   (hermes--async-command (if reverse "Reverting hunk" "Applying hunk")
                      "patch"
                      (lambda (_)
                        (delete-file temp-file))
-                     "--unified" (and revert "--reverse") "--batch"
+                     "--unified" (and reverse "--reverse") "--batch"
                      "--input" temp-file
                      "--" file)))
                "-c" (oref parent rev)
