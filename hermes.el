@@ -137,7 +137,7 @@
 
 (cl-defgeneric hermes--item-string (data))
 (cl-defmethod hermes--item-string ((data hermes--changeset))
-  (oref data rev))
+  (car (split-string (oref data rev))))
 (cl-defmethod hermes--item-string ((data hermes--shelve))
   (oref data name))
 (cl-defmethod hermes--item-string ((data t))
