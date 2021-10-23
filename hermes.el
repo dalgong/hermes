@@ -241,33 +241,48 @@
     "-n"
     (oref data name)))
 
-(cl-defgeneric hermes--revert (data))
-(cl-defmethod hermes--revert ((data hermes--changeset))
-  (cond ((and (oref data rev) (y-or-n-p (format "Strip changeset %s? " (oref data rev))))
-         (hermes--run-hg-command (format "Stripping changeset %s..." (oref data rev))
-           "strip"
-           #'ignore
-           "--rev" (oref data rev)))
-        ((and (null (oref data rev)) (y-or-n-p "Revert pending changes? "))
-         (if-let (files (mapcar (lambda (d) (oref d file))
-                                (remove-if-not (lambda (d) (string= "?" (oref d status)))
-                                               (oref data files))))
-             (hermes--async-command nil
-               "rm"
-               (lambda (_)
-                 (hermes--run-hg-command "Revert pending changes..."
-                   "update"
-                   #'ignore
-                   "-C" "."))
-               "-f" files)
-           (hermes--run-hg-command "Revert pending changes..."
-             "update"
+(cl-defgeneric hermes--apply (data &optional reverse))
+(cl-defmethod hermes--apply ((data hermes--changeset) &optional reverse)
+  (cond ((null (oref data rev))
+         (unless reverse
+           (error "Cannot apply pending changes"))
+         (when (y-or-n-p "Revert pending changes? ")
+           (if-let (files (mapcar (lambda (d) (oref d file))
+                                  (remove-if-not (lambda (d) (string= "?" (oref d status)))
+                                                 (oref data files))))
+               (hermes--async-command nil
+                 "rm"
+                 (lambda (_)
+                   (hermes--run-hg-command "Revert pending changes..."
+                     "update"
+                     #'ignore
+                     "-C" "."))
+                 "-f" files)
+             (hermes--run-hg-command "Revert pending changes..."
+               "update"
+               #'ignore
+               "-C" "."))))
+        (t
+         (when (y-or-n-p (format (if reverse
+                                     "Strip changeset %s? "
+                                   "Graft changeset %s? ") (oref data rev)))
+           (hermes--run-hg-command (format (if reverse
+                                               "Stripping changeset %s..."
+                                             "Grafting changeset %s...")
+                                           (oref data rev))
+             (if reverse "strip" "graft")
              #'ignore
-             "-C" ".")))))
-(cl-defmethod hermes--revert ((data hermes--file))
+             "--rev" (oref data rev))))))
+(cl-defmethod hermes--apply ((data hermes--file) &optional reverse)
   (let ((parent (oref data parent))
         (file (oref data file)))
-    (when (y-or-n-p (format "Revert %s? " file))
+    (when (hermes--shelve-p parent)
+      (error "Cannot %s file under shelve" (if reverse "revert" "apply")))
+    (when (and (null reverse)
+               (or (string= "?" (oref data status))
+                   (null (oref parent rev))))
+      (error "Cannot apply this file change"))
+    (when (y-or-n-p (format (if reverse "Revert %s? " "Apply %s? ") file))
       (cond ((string= "?" (oref data status))
              (hermes--async-command nil
                "rm"
@@ -286,34 +301,43 @@
                (lambda (o)
                  (let ((temp-file (make-nearby-temp-file "hunk" nil ".patch")))
                    (write-region o nil temp-file)
-                   (hermes--async-command "Reverting hunk"
+                   (hermes--async-command (if revert "Reverting hunk" "Applying hunk")
                      "patch"
                      (lambda (_)
                        (delete-file temp-file))
-                     "--unified" "--reverse" "--batch"
+                     "--unified" (and revert "--reverse") "--batch"
                      "--input" temp-file
                      "--" file)))
                "-c" (oref parent rev)
                file))))))
-(cl-defmethod hermes--revert ((data hermes--hunk))
-  (when (y-or-n-p "Revert hunk? ")
+(cl-defmethod hermes--apply ((data hermes--hunk) &optional reverse)
+  (when (y-or-n-p (if reverse ? "Revert hunk? " "Apply hunk? "))
     (let ((temp-file (make-nearby-temp-file "hunk" nil ".patch")))
       (write-region
        (mapconcat #'identity
                   (append (oref data lines) '(""))
                   "\n")
        nil temp-file)
-      (hermes--async-command "Reverting hunk"
+      (hermes--async-command (if reverse "Reverting hunk" "Applying hunk")
         "patch"
         (lambda (_)
           (delete-file temp-file))
-        "--unified" "--reverse" "--batch" "--input" temp-file "--" (oref (oref data parent) file)))))
-(cl-defmethod hermes--revert ((data hermes--shelve))
-  (when (y-or-n-p (format "Delete %s? " (oref data name)))
-    (hermes--run-hg-command (format "Deleting shelve %s" (oref data name))
-      "shelve"
-      #'ignore
-      "-d" (oref data name))))
+        "--unified" (and reverse "--reverse") "--batch"
+        "--input" temp-file "--" (oref (oref data parent) file)))))
+(cl-defmethod hermes--apply ((data hermes--shelve) &optional reverse)
+  (if reverse
+      (when (y-or-n-p (format "Delete %s? " (oref data name)))
+        (hermes--run-hg-command (format "Deleting shelve %s" (oref data name))
+          "shelve"
+          #'ignore
+          "-d" (oref data name)))
+    (when (y-or-n-p (format "Apply %s? " (oref data name)))
+      (hermes--run-hg-command (format "Unshelve %s" (oref data name))
+        "unshelve"
+        #'hermes-refresh
+        "--keep"
+        "-n"
+        (oref data name)))))
 
 ;; process invocation
 (defvar hermes--async-last-command-buffer nil)
@@ -662,10 +686,15 @@ Others - filename."
        (kill-new s)
        (message "Copied %s" s )))))
 
+(defun hermes-apply ()
+  "Apply changes under the point."
+  (interactive)
+  (hermes--apply (hermes--current-data)))
+
 (defun hermes-revert ()
   "Revert changes under the point."
   (interactive)
-  (hermes--revert (hermes--current-data)))
+  (hermes--apply (hermes--current-data) 'reverse))
 
 (defun hermes--current-changeset ()
   (let ((data (hermes--current-data)))
@@ -910,7 +939,7 @@ Others - filename."
     (define-key map (kbd "TAB") #'hermes-toggle-expand)
     (define-key map (kbd "RET") #'hermes-visit)
     (define-key map "." #'hermes-goto-head-revision)
-    (define-key map "a" #'hermes-addremove)
+    (define-key map "A" #'hermes-addremove)
     (define-key map "c" #'hermes-commit)
     (define-key map "d" #'hermes-show-revision)
     (define-key map "m" #'hermes-mark-unmark)
@@ -919,6 +948,7 @@ Others - filename."
     (define-key map "v" #'hermes-phase)
     (define-key map "w" #'hermes-kill)
     (define-key map "z" #'hermes-shelve)
+    (define-key map "a" #'hermes-apply)
     (define-key map "k" #'hermes-revert)
     (define-key map "i" #'hermes-graft)
     (define-key map "r" #'hermes-rebase)
