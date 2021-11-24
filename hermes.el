@@ -311,7 +311,7 @@
                "-c" (oref parent rev)
                file))))))
 (cl-defmethod hermes--apply ((data hermes--hunk) &optional reverse)
-  (when (y-or-n-p (if reverse ? "Revert hunk? " "Apply hunk? "))
+  (when (y-or-n-p (if reverse "Revert hunk? " "Apply hunk? "))
     (let ((temp-file (make-nearby-temp-file "hunk" nil ".patch")))
       (write-region
        (mapconcat #'identity
