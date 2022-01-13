@@ -350,8 +350,6 @@
 (defun hermes--process-sentinel (proc event)
   (when (memq (process-status proc) '(exit signal))
     (setq event (substring event 0 -1))
-    (when (string-match "^finished" event)
-      (message (concat (capitalize (process-name proc)) " finished")))
     (let ((command-buffer (process-get proc 'command-buffer))
           (callback (process-get proc 'callback))
           (output (with-current-buffer (process-buffer proc)
@@ -458,7 +456,7 @@ If more multiple commands are given, runs them in parallel."
         (process-send-region proc (point-min) (point-max))
         (process-send-eof    proc)))
     proc))
-(hermes--async-command "test" "ls" #'ignore "-al")
+
 (defun hermes--run-hg-command (name command callback &rest args)
   (declare (indent 1))
   (apply #'hermes--async-command
@@ -472,9 +470,11 @@ If more multiple commands are given, runs them in parallel."
 (defun hermes--run-interactive-command (name command-and-args &optional callback require-terminal show)
   "Run a command and call callback with the buffer after it is done."
   (declare (indent 1))
-  (hermes--run-hg-command name (car command-and-args)
-                          callback
-                          (cdr command-and-args))
+  (apply #'hermes--async-command
+         name
+         (car command-and-args)
+         callback
+         (cdr command-and-args))
   (when show
     (hermes-show-last-command)
     (with-current-buffer hermes--async-command-buffer
