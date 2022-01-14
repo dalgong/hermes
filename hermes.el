@@ -218,10 +218,13 @@
     #'hermes-refresh
     "--rev" (oref data rev)))
 (cl-defmethod hermes--visit ((data hermes--file))
-  (funcall (if current-prefix-arg
-               #'find-file-other-window
-             #'find-file)
-           (oref data file)))
+  (let ((file (oref data file)))
+    (when (string-match "^    \\(.*\\)$" file)
+      (setq file (match-string 1 file)))
+    (funcall (if current-prefix-arg
+                 #'find-file-other-window
+               #'find-file)
+             (oref data file))))
 (cl-defmethod hermes--visit ((data hermes--hunk))
   (let ((line-num (get-text-property (point) 'hermes-line-num)))
     (with-current-buffer
@@ -897,6 +900,77 @@ Others - filename."
    (mapcar (lambda (data) (oref data file)) (hermes--marked-files))
    :test #'string-equal))
 
+(transient-define-prefix hermes-resolve ()
+  "Create a new commit or replace an existing commit."
+  [["Resolve"
+    ("a" "Abort"         hermes-resolve-abort)
+    ("c" "Continue"      hermes-resolve-continue)
+    ("m" "Mark resolved" hermes-resolve-mark)
+    ("r" "Resolve"       hermes-resolve-resolve)]])
+(defun hermes-resolve--get-status ()
+  (let (abort-cmd continue-cmd unresolved-files)
+    (ewoc-map (lambda (data)
+                (when (and (hermes--changeset-p data)
+                           (null (oref data rev)))
+                  (dolist (f (oref data files))
+                    (when (string= "#" (oref f status))
+                      (let ((parts (split-string (oref f file) ": *" t)))
+                        (cond ((and (= 2 (length parts))
+                                    (string= (car parts) "To abort"))
+                               (setq abort-cmd (cdr (split-string (cl-second parts)))))
+                              ((and (= 2 (length parts))
+                                    (string= (car parts) "To continue"))
+                               (setq continue-cmd (cdr (split-string (cl-second parts)))))
+                              ((and parts
+                                    (string-match "^    \\(.*\\)$" (car parts)))
+                               (push (match-string 1 (car parts)) unresolved-files))))))))
+              hermes--ewoc)
+    (and abort-cmd (list abort-cmd continue-cmd unresolved-files))))
+(defun hermes-resolve-abort ()
+  (interactive)
+  (let* ((rs (hermes-resolve--get-status))
+         (cmd-args (cl-first rs)))
+    (unless rs
+      (error "Not in conflict resolution state."))
+    (hermes--run-interactive-command "Aborting"
+      (append hermes--hg-commands cmd-args)
+      #'hermes-refresh)))
+(defun hermes-resolve-continue ()
+  (interactive)
+  (let* ((rs (hermes-resolve--get-status))
+         (cmd-args (cl-second rs)))
+    (unless rs
+      (error "Not in conflict resolution state."))
+    (when (cl-third rs)
+      (error "Cannot continue with unresolved files."))
+    (hermes--run-interactive-command "Continuing"
+      (append hermes--hg-commands cmd-args)
+      #'hermes-refresh)))
+(defun hermes-resolve-mark ()
+  (interactive)
+  (let* ((rs (hermes-resolve--get-status))
+         (files (cl-third rs)))
+    (unless rs
+      (error "Not in conflict resolution state."))
+    (let ((file (completing-read "File to mark resolved: " files nil t)))
+      (with-current-buffer (find-file-noselect file)
+        (revert-buffer))
+      (hermes--run-interactive-command (format "Marking %s resolved" file)
+        (append hermes--hg-commands (list "resolve" "--mark" file))
+        #'hermes-refresh))))
+(defun hermes-resolve-resolve ()
+  (interactive)
+  (let* ((rs (hermes-resolve--get-status))
+         (files (cl-third rs)))
+    (unless rs
+      (error "Not in conflict resolution state."))
+    (let ((file (completing-read "File to mark resolved: " files nil t)))
+      (with-current-buffer (find-file-noselect file t)
+        (revert-buffer nil t))
+      (hermes--run-interactive-command (format "Resolving %s" file)
+        (list "hg" "resolve" file)
+        #'hermes-refresh))))
+
 (transient-define-prefix hermes-commit ()
   "Create a new commit or replace an existing commit."
   ["Arguments"
@@ -1000,6 +1074,7 @@ Others - filename."
     (define-key map "c" #'hermes-commit)
     (define-key map "d" #'hermes-show-revision)
     (define-key map "m" #'hermes-mark-unmark)
+    (define-key map "M" #'hermes-resolve)
     (define-key map "u" #'hermes-unmark-all)
     (define-key map ":" #'hermes-run-hg)
     (define-key map "v" #'hermes-phase)
