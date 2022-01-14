@@ -349,7 +349,6 @@
        (display-buffer hermes--async-command-buffer)))
 (defun hermes--process-sentinel (proc event)
   (when (memq (process-status proc) '(exit signal))
-    (setq event (substring event 0 -1))
     (let ((command-buffer (process-get proc 'command-buffer))
           (callback (process-get proc 'callback))
           (output (with-current-buffer (process-buffer proc)
@@ -386,9 +385,15 @@
   (with-current-buffer (process-buffer proc)
     (let ((inhibit-read-only t))
       (goto-char (process-mark proc))
-      (insert (propertize string 'proc proc))
+      (insert (propertize string
+                          'proc proc
+                          'face 'diff-context))
       (set-marker (process-mark proc) (point)))))
 
+(defun hermes-process-quit ()
+  (interactive)
+  (when (eq (window-buffer) (current-buffer))
+    (quit-window current-prefix-arg)))
 (defun hermes-process-kill ()
   (interactive)
   (ignore-errors (kill-process (get-text-property (point) 'proc))))
@@ -414,12 +419,17 @@
     (define-key m (kbd "c") #'hermes-process-clear)
     (define-key m (kbd "n") #'forward-page)
     (define-key m (kbd "p") #'backward-page)
+    (define-key m (kbd "q") #'hermes-process-quit)
     (define-key m (kbd "RET") #'hermes-process-send-string)
     (define-key m (kbd "TAB") #'hermes-process-toggle-output)
     (define-key m (kbd "C-d") #'hermes-process-send-eof)
     m))
+(defvar-local hermes-process-output-mode nil)
 (define-minor-mode hermes-process-output-mode
-  "A minor mode for hermes processes.")
+  "A minor mode for hermes processes."
+  (when hermes-process-output-mode
+    (buffer-disable-undo)
+    (setq buffer-read-only t)))
 (defun hermes--async-command (name command callback &rest args)
   "Run command and feed the output to callback.
 If more multiple commands are given, runs them in parallel."
@@ -436,6 +446,7 @@ If more multiple commands are given, runs them in parallel."
                       (or name command)
                       hermes--async-command-buffer
                       command args)))
+    (set-process-buffer proc hermes--async-command-buffer)
     (with-current-buffer hermes--async-command-buffer
       (goto-char (point-max))
       (let ((inhibit-read-only t))
@@ -445,8 +456,7 @@ If more multiple commands are given, runs them in parallel."
                             'face 'bold
                             'proc proc)))
       (process-put proc 'start (set-marker (make-marker) (1- (point))))
-      (set-marker (process-mark proc) (point))
-      (set-process-buffer proc hermes--async-command-buffer))
+      (set-marker (process-mark proc) (point)))
     (with-editor-set-process-filter proc #'hermes--process-filter)
     (set-process-sentinel           proc #'hermes--process-sentinel)
     (process-put proc 'command-buffer (current-buffer))
@@ -1055,7 +1065,7 @@ Others - filename."
                     "--debug" "-G"
                     "-T" hermes--log-template
                     "-r" hermes--log-revset)))
-        (while (and p (process-live-p p))
+        (while (process-live-p p)
           (sleep-for 0.05)))
       (dolist (changeset recents)
         (when (cl-find (oref changeset rev) parents :test #'string=)
