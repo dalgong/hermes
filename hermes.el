@@ -480,11 +480,12 @@ If more multiple commands are given, runs them in parallel."
 (defun hermes--run-interactive-command (name command-and-args &optional callback require-terminal show)
   "Run a command and call callback with the buffer after it is done."
   (declare (indent 1))
-  (apply #'hermes--async-command
-         name
-         (car command-and-args)
-         callback
-         (cdr command-and-args))
+  (with-editor
+    (apply #'hermes--async-command
+           name
+           (car command-and-args)
+           callback
+           (cdr command-and-args)))
   (when show
     (hermes-show-last-command)
     (with-current-buffer hermes--async-command-buffer
