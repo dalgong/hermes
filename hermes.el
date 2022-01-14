@@ -170,18 +170,22 @@
                                         :lines (split-string (concat "@@" hunk) "\n")
                                         :parent data))
                                      (cdr (split-string o "\n@@" t))))
-                       (hermes--expand data node))))
-      (if (string= "?" (oref data status))
-          (hermes--async-command "Expanding file"
-            "diff"
-            callback
-            "-u" "/dev/null" (oref data file))
-        (hermes--run-hg-command "Expanding file"
-          "diff"
-          callback
-          (when (oref data rev) "--change")
-          (when (oref data rev) (oref data rev))
-          (oref data file))))))
+                       (hermes--expand data node)))
+           (status (oref data status))
+           (filename (oref data file)))
+      (cond ((string= "?" status)
+             (hermes--async-command "Expanding file"
+               "diff"
+               callback
+               "-u" "/dev/null" filename))
+            ((or (not (string= "#" status))
+                 (setq filename (hermes--sanitize-filename filename)))
+             (hermes--run-hg-command "Expanding file"
+               "diff"
+               callback
+               (when (oref data rev) "--change")
+               (when (oref data rev) (oref data rev))
+               filename))))))
 (cl-defmethod hermes--expand ((data hermes--shelve) node &optional force)
   (if (and (oref data files) (not force))
       (dolist (file (oref data files))
@@ -218,9 +222,15 @@
     #'hermes-refresh
     "--rev" (oref data rev)))
 (cl-defmethod hermes--visit ((data hermes--file))
-  (let ((file (oref data file)))
-    (when (string-match "^    \\(.*\\)$" file)
-      (setq file (match-string 1 file)))
+  (if (and (string= "#" (oref data status))
+           (hermes-resolve--get-status))
+      (if-let (file (hermes-resolve--get-current-file))
+          (with-current-buffer (funcall (if current-prefix-arg
+                                            #'find-file-other-window
+                                          #'find-file)
+                                        file)
+            (revert-buffer nil t))
+        (hermes-resolve))
     (funcall (if current-prefix-arg
                  #'find-file-other-window
                #'find-file)
@@ -905,8 +915,10 @@ Others - filename."
   [["Resolve"
     ("a" "Abort"         hermes-resolve-abort)
     ("c" "Continue"      hermes-resolve-continue)
-    ("m" "Mark resolved" hermes-resolve-mark)
-    ("r" "Resolve"       hermes-resolve-resolve)]])
+    ("m" "Mark resolved" hermes-resolve-mark)]])
+(defun hermes--sanitize-filename (filename)
+  (when (string-match "^    \\(.*\\)$" filename)
+    (match-string 1 filename)))
 (defun hermes-resolve--get-status ()
   (let (abort-cmd continue-cmd unresolved-files)
     (ewoc-map (lambda (data)
@@ -922,8 +934,8 @@ Others - filename."
                                     (string= (car parts) "To continue"))
                                (setq continue-cmd (cdr (split-string (cl-second parts)))))
                               ((and parts
-                                    (string-match "^    \\(.*\\)$" (car parts)))
-                               (push (match-string 1 (car parts)) unresolved-files))))))))
+                                    (setq parts (hermes--sanitize-filename (car parts))))
+                               (push parts unresolved-files))))))))
               hermes--ewoc)
     (and abort-cmd (list abort-cmd continue-cmd unresolved-files))))
 (defun hermes-resolve-abort ()
@@ -946,29 +958,24 @@ Others - filename."
     (hermes--run-interactive-command "Continuing"
       (append hermes--hg-commands cmd-args)
       #'hermes-refresh)))
+(defun hermes-resolve--get-current-file ()
+  (let ((data (and (not current-prefix-arg) (hermes--current-data))))
+    (and data
+         (hermes--file-p data)
+         (string= "#" (oref data status))
+         (hermes--sanitize-filename (oref data file)))))
 (defun hermes-resolve-mark ()
   (interactive)
   (let* ((rs (hermes-resolve--get-status))
          (files (cl-third rs)))
     (unless rs
       (error "Not in conflict resolution state."))
-    (let ((file (completing-read "File to mark resolved: " files nil t)))
+    (let ((file (or (hermes-resolve--get-current-file)
+                    (completing-read "File to mark resolved: " files nil t))))
       (with-current-buffer (find-file-noselect file)
         (revert-buffer))
       (hermes--run-interactive-command (format "Marking %s resolved" file)
         (append hermes--hg-commands (list "resolve" "--mark" file))
-        #'hermes-refresh))))
-(defun hermes-resolve-resolve ()
-  (interactive)
-  (let* ((rs (hermes-resolve--get-status))
-         (files (cl-third rs)))
-    (unless rs
-      (error "Not in conflict resolution state."))
-    (let ((file (completing-read "File to mark resolved: " files nil t)))
-      (with-current-buffer (find-file-noselect file t)
-        (revert-buffer nil t))
-      (hermes--run-interactive-command (format "Resolving %s" file)
-        (list "hg" "resolve" file)
         #'hermes-refresh))))
 
 (transient-define-prefix hermes-commit ()
@@ -1074,7 +1081,6 @@ Others - filename."
     (define-key map "c" #'hermes-commit)
     (define-key map "d" #'hermes-show-revision)
     (define-key map "m" #'hermes-mark-unmark)
-    (define-key map "M" #'hermes-resolve)
     (define-key map "u" #'hermes-unmark-all)
     (define-key map ":" #'hermes-run-hg)
     (define-key map "v" #'hermes-phase)
