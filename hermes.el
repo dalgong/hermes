@@ -805,7 +805,7 @@ With prefix argument, use the read revision instead of current revision."
      `(,@hermes--hg-commands
        "rebase"
        "--rev" ,(if current-prefix-arg
-                    (hermes--read-revision)
+                    (hermes--read-revision "Revision to rebase: ")
                   ".")
        "--dest" ,dest)
      #'hermes-refresh)))
@@ -840,8 +840,8 @@ With prefix argument, use the read revision instead of current revision."
               hermes--ewoc)
     datas))
 
-(defun hermes--read-revision ()
-  (car (split-string (completing-read "Revision: "
+(defun hermes--read-revision (prompt &optional initial-input history)
+  (car (split-string (completing-read prompt
                                       (mapcar (lambda (d)
                                                 (let ((front (hermes--format-changeset-line d)))
                                                   (concat front
@@ -850,10 +850,12 @@ With prefix argument, use the read revision instead of current revision."
                                               (remove-if-not #'identity
                                                              (hermes--all-revisions)))
                                       nil
-                                      t))))
+                                      t
+                                      initial-input
+                                      history))))
 (defun hermes-goto-revision (rev)
   "Jump to current revision."
-  (interactive (list (hermes--read-revision)))
+  (interactive (list (hermes--read-revision "Goto revision: ")))
   (ewoc-map (lambda (data)
               (when (and (hermes--changeset-p data)
                          (oref data rev)
