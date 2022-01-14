@@ -795,14 +795,19 @@ Others - filename."
       #'hermes-refresh)))
 
 (defun hermes-rebase ()
-  "Rebase current revision to the change under the point."
+  "Rebase current revision to the change under the point.
+With prefix argument, use the read revision instead of current revision."
   (interactive)
   (let ((dest (oref (hermes--current-changeset) rev)))
     (unless dest
       (error "Not on a revision."))
    (hermes--run-interactive-command (format "Rebase to %s" dest)
      `(,@hermes--hg-commands
-       "rebase" "--rev" "." "--dest" ,dest)
+       "rebase"
+       "--rev" ,(if current-prefix-arg
+                    (hermes--read-revision)
+                  ".")
+       "--dest" ,dest)
      #'hermes-refresh)))
 
 (defvar hermes-run-hg-history nil)
