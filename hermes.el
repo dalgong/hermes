@@ -263,8 +263,8 @@
            (error "Cannot apply pending changes"))
          (when (y-or-n-p "Revert pending changes? ")
            (if-let (files (mapcar (lambda (d) (oref d file))
-                                  (remove-if-not (lambda (d) (string= "?" (oref d status)))
-                                                 (oref data files))))
+                                  (cl-remove-if-not (lambda (d) (string= "?" (oref d status)))
+                                                    (oref data files))))
                (hermes--async-command nil
                  "rm"
                  (lambda (_)
@@ -842,18 +842,20 @@ With prefix argument, use the read revision instead of current revision."
     datas))
 
 (defun hermes--read-revision (prompt &optional initial-input history)
-  (car (split-string (completing-read prompt
-                                      (mapcar (lambda (d)
-                                                (let ((front (hermes--format-changeset-line d)))
-                                                  (concat front
-                                                          (make-string (max 0 (- 70 (length front))) ? )
-                                                          (oref d summary))))
-                                              (remove-if-not #'identity
-                                                             (hermes--all-revisions)))
-                                      nil
-                                      t
-                                      initial-input
-                                      history))))
+  (let* ((revs (mapcar (lambda (d) (cons (hermes--format-changeset-line d)
+                                         (oref d summary)))
+                       (cl-remove-if-not #'identity (hermes--all-revisions))))
+         (max-size (and revs (apply #'max (mapcar #'length (mapcar #'car revs))))))
+    (car (split-string (completing-read prompt
+                                        (mapcar (lambda (e)
+                                                  (concat (car e)
+                                                          (make-string (+ 1 (- max-size (length (car e)))) ? )
+                                                          (cdr e)))
+                                                revs)
+                                        nil
+                                        t
+                                        initial-input
+                                        history)))))
 (defun hermes-goto-revision (rev)
   "Jump to current revision."
   (interactive (list (hermes--read-revision "Goto revision: ")))
