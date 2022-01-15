@@ -243,7 +243,8 @@
         (funcall (if current-prefix-arg
                      #'find-file-other-window
                    #'find-file)
-                 (oref (oref data parent) file))
+                 (or (hermes--sanitize-filename (oref (oref data parent) file))
+                     (oref (oref data parent) file)))
       (when line-num
         (goto-line line-num)))))
 (cl-defmethod hermes--visit ((data hermes--shelve))
