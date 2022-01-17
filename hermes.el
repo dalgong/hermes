@@ -36,7 +36,11 @@
                    #'with-editor-mode))
 
 (defvar hermes--log-revset "reverse(.~3::)")
-(defvar hermes--hg-commands '("hg" "--color=never" "--pager=never"))
+(defvar hermes--hg-commands
+  '("hg"
+    "--color=never"
+    "--pager=never"
+    "--config" "ui.merge=internal:merge3"))
 (defvar hermes--log-template
   (concat "changeset: {node|short}\\n"
           "summary: {desc|firstline}\\n"
@@ -549,8 +553,9 @@ If more multiple commands are given, runs them in parallel."
 (defun hermes--parse-changesets (o &optional parents)
   "Parse 'hg log' output into hermes--changeset records."
   ;; --debug option may print out some garbage at the beginnig.
-  (when-let (p (string-match "\n.\s+changeset: " o))
-    (setq o (substring o (1+ p))))
+  (unless (= 0 (or (string-match ".\s+changeset: " o) -1))
+    (when-let (p (string-match "\n.\s+changeset: " o))
+      (setq o (substring o (1+ p)))))
   (let (changesets props)
     (dolist (line (split-string o "\n" t))
       ;; 'o' can be used for graphic representation
@@ -1127,6 +1132,7 @@ With prefix argument, use the read revision instead of current revision."
     (define-key map "c" #'hermes-commit)
     (define-key map "d" #'hermes-show-revision)
     (define-key map "m" #'hermes-mark-unmark)
+    (define-key map "M" #'hermes-resolve)
     (define-key map "u" #'hermes-unmark-all)
     (define-key map ":" #'hermes-run-hg)
     (define-key map "v" #'hermes-phase)
@@ -1178,7 +1184,8 @@ With prefix argument, use the read revision instead of current revision."
       (dolist (p (list
                   (hermes--run-hg-command nil
                     "status"
-                    (lambda (o) (hermes--parse-status-files modified o)))
+                    (lambda (o) (hermes--parse-status-files modified o))
+                    "--verbose")
                   (hermes--run-hg-command nil
                     "parent"
                     (lambda (o) (setq parents (mapcar (lambda (o) (oref o rev))
