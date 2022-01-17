@@ -378,6 +378,7 @@
                       (prog1
                           (buffer-substring-no-properties (1+ (point))
                                                           (marker-position (process-mark proc)))
+                        (hermes-backward-process 1)
                         (put-text-property (process-get proc 'start) (process-mark proc)
                                            'invisible t))))))
       (condition-case err
@@ -408,7 +409,8 @@
       (insert (propertize string
                           'proc proc
                           'face 'diff-context))
-      (set-marker (process-mark proc) (point)))))
+      (set-marker (process-mark proc) (point))
+      (hermes-backward-process 1))))
 
 (defun hermes-process-quit ()
   (interactive)
@@ -433,12 +435,27 @@
       (put-text-property (process-get proc 'start) (process-mark proc)
                          'invisible
                          (not (get-text-property (process-get proc 'start) 'invisible))))))
+(defun hermes-forward-process (&optional count)
+  (interactive "p")
+  (or count (setq count 1))
+  (let (m)
+    (if (> count 0)
+        (while (and (setq m (text-property-search-forward 'proc))
+                    (>= (cl-decf count) 0)))
+      (while (and (setq m (text-property-search-backward 'proc))
+                  (< (cl-incf count) 0))))
+    (when m
+      (goto-char (prop-match-beginning m)))))
+(defun hermes-backward-process (&optional count)
+  (interactive "p")
+  (or count (setq count 1))
+  (hermes-forward-process (- count)))
 (defvar hermes-process-output-mode-map
   (let ((m (make-sparse-keymap)))
     (define-key m (kbd "C-g") #'hermes-process-kill)
     (define-key m (kbd "c") #'hermes-process-clear)
-    (define-key m (kbd "n") #'forward-page)
-    (define-key m (kbd "p") #'backward-page)
+    (define-key m (kbd "n") #'hermes-forward-process)
+    (define-key m (kbd "p") #'hermes-backward-process)
     (define-key m (kbd "q") #'hermes-process-quit)
     (define-key m (kbd "RET") #'hermes-process-send-string)
     (define-key m (kbd "TAB") #'hermes-process-toggle-output)
@@ -469,14 +486,18 @@ If more multiple commands are given, runs them in parallel."
     (set-process-buffer proc hermes--async-command-buffer)
     (with-current-buffer hermes--async-command-buffer
       (goto-char (point-max))
-      (let ((inhibit-read-only t))
-        (insert (propertize (concat "\n\n"
-                                    (mapconcat #'identity (cons command args) " ")
-                                    " ...\n")
+      (let ((inhibit-read-only t)
+            (cmdline (mapconcat #'identity (cons command args) " ")))
+        (when (string-match (concat "^"
+                                    (regexp-quote (mapconcat #'identity hermes--hg-commands " "))
+                                    " \\(.*\\)$")
+                            cmdline)
+          (setq cmdline (concat "hg " (match-string 1 cmdline))))
+        (insert (propertize (concat (if (= (point) (point-at-bol)) "" "\n") cmdline " ...\n\n")
                             'face 'bold
                             'proc proc)))
-      (process-put proc 'start (set-marker (make-marker) (1- (point))))
-      (set-marker (process-mark proc) (point)))
+      (process-put proc 'start (set-marker (make-marker) (- (point) 2)))
+      (set-marker (process-mark proc) (1- (point))))
     (with-editor-set-process-filter proc #'hermes--process-filter)
     (set-process-sentinel           proc #'hermes--process-sentinel)
     (process-put proc 'command-buffer (current-buffer))
