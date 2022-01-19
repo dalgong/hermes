@@ -373,8 +373,9 @@
           (callback (process-get proc 'callback))
           (output (with-current-buffer (process-buffer proc)
                     (let ((inhibit-read-only t))
-                      (goto-char (marker-position (process-get proc 'start)))
-                      (backward-delete-char 3)
+                      (goto-char (process-get proc 'start))
+                      (apply #'put-text-property
+                             (list (point-at-bol 1) (point-at-bol 2) 'face 'shadow))
                       (prog1
                           (buffer-substring-no-properties (1+ (point))
                                                           (marker-position (process-mark proc)))
@@ -408,7 +409,8 @@
       (goto-char (process-mark proc))
       (insert (propertize string
                           'proc proc
-                          'face 'diff-context))
+                          'face 'diff-context
+                          'line-prefix "  "))
       (set-marker (process-mark proc) (point))
       (hermes-backward-process 1))))
 
@@ -493,7 +495,8 @@ If more multiple commands are given, runs them in parallel."
                                     " \\(.*\\)$")
                             cmdline)
           (setq cmdline (concat "hg " (match-string 1 cmdline))))
-        (insert (propertize (concat (if (= (point) (point-at-bol)) "" "\n") cmdline " ...\n\n")
+        (insert (propertize (concat (if (= (point) (point-at-bol)) "" "\n")
+                                    "$ " cmdline "\n\n")
                             'face 'bold
                             'proc proc)))
       (process-put proc 'start (set-marker (make-marker) (- (point) 2)))
