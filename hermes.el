@@ -50,8 +50,10 @@
 
 (defclass hermes--base ()
   ((parent      :initarg :parent      :initform nil)
+   (node        :initarg :node        :initform nil)
+   (expandable  :initarg :expandable  :initform t)
    (expanded    :initarg :expanded    :initform nil)
-   (node        :initarg :node        :initform nil)))
+   (refresh     :initarg :refresh     :initform nil)))
 (defclass hermes--changeset (hermes--base)
   ((title       :initarg :title       :initform nil)
    (rev         :initarg :rev         :initform nil)
@@ -148,12 +150,6 @@
 (cl-defmethod hermes--item-string ((data t))
   (oref data file))
 
-(cl-defgeneric hermes--expandable (data))
-(cl-defmethod hermes--expandable ((_ hermes--hunk))
-  nil)
-(cl-defmethod hermes--expandable ((_ t))
-  t)
-
 (cl-defgeneric hermes--expand (data node &optional force))
 (cl-defmethod hermes--expand ((data hermes--changeset) node &optional force)
   (if (and (oref data files) (not force))
@@ -173,6 +169,7 @@
                        (setf (oref data hunks)
                              (mapcar (lambda (hunk)
                                        (hermes--hunk
+                                        :expandable nil
                                         :lines (split-string (concat "@@" hunk) "\n")
                                         :parent data))
                                      (cdr (split-string o "\n@@" t))))
@@ -213,6 +210,7 @@
                           (setf (oref file hunks)
                                 (mapcar (lambda (hunk)
                                           (hermes--hunk
+                                           :expandable nil
                                            :lines (split-string (concat "@@" hunk) "\n")
                                            :parent file))
                                         hunks))
@@ -454,6 +452,7 @@
   (hermes-forward-process (- count)))
 (defvar hermes-process-output-mode-map
   (let ((m (make-sparse-keymap)))
+    (suppress-keymap m)
     (define-key m (kbd "C-g") #'hermes-process-kill)
     (define-key m (kbd "c") #'hermes-process-clear)
     (define-key m (kbd "n") #'hermes-forward-process)
@@ -738,14 +737,25 @@ If more multiple commands are given, runs them in parallel."
   "Expand or shrink current node.
 When a prefix argument is given while expanding, recompute childrens."
   (interactive)
-  (setq buffer-read-only nil)
   (let* ((node (ewoc-locate hermes--ewoc))
          (data (and node (ewoc-data node)))
-         buffer-read-only)
-    (when (and data (hermes--expandable data))
+         (inhibit-read-only t))
+    (when (and data (oref data expandable))
       (if (cl-callf not (oref data expanded))
           (hermes--expand data node current-prefix-arg)
         (hermes--filter-children data)))))
+
+(defun hermes-refresh-node ()
+  "Refresh current node."
+  (interactive)
+  (let* ((node (ewoc-locate hermes--ewoc))
+         (data (and node (ewoc-data node)))
+         (inhibit-read-only t))
+    (when-let (fn (and data (oref data refresh)))
+      (funcall fn data)
+      (setf (oref data node)
+            (ewoc-enter-after hermes--ewoc node data))
+      (ewoc-delete node))))
 
 (defun hermes--current-data ()
   (when-let (node (ewoc-locate hermes--ewoc))
@@ -941,7 +951,7 @@ With prefix argument, use the read revision instead of current revision."
            (ewoc-invalidate hermes--ewoc node))
           ((or (hermes--changeset-p data)
                (hermes--shelve-p data))
-           (when (and (hermes--expandable data)
+           (when (and (oref data expandable)
                       (not (oref data expanded)))
              (hermes-toggle-expand))
            (mapcar (lambda (file)
