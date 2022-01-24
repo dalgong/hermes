@@ -496,6 +496,12 @@
 If more multiple commands are given, runs them in parallel."
   (declare (indent 1))
   (setq args (cl-remove-if-not #'identity args))
+  (when (or (null hermes--async-command-buffer)
+            (not (buffer-live-p hermes--async-command-buffer)))
+    (with-current-buffer
+        (setq hermes--async-command-buffer
+              (get-buffer-create (concat " CMD " (buffer-name))))
+      (hermes-process-output-mode t)))
   (let* ((process-connection-type nil)
          (proc (apply #'start-file-process
                       (or name command)
