@@ -468,17 +468,34 @@
   (when hermes-process-output-mode
     (buffer-disable-undo)
     (setq buffer-read-only t)))
+
+(defun hermes--sync-command (name command callback &rest args)
+  (declare (indent 1))
+  (setq args (cl-remove-if-not #'identity args))
+  (let ((original-buffer (current-buffer))
+        (inhibit-message t)
+        (output-buffer (get-buffer-create (concat " REMOTE-CMD " (buffer-name))))
+        output)
+    (save-excursion
+      (with-current-buffer output-buffer
+        (let ((inhibit-read-only t))
+          (erase-buffer)))
+      (cl-letf (((symbol-function #'display-message-or-buffer) #'ignore))
+        (shell-command (mapconcat 'shell-quote-argument (cons command args) " ")
+                       output-buffer))
+      (setq output (with-current-buffer output-buffer (buffer-string))))
+    (condition-case err
+        (funcall callback output)
+      (error
+       (message "hermes command error: %s" err)))
+    (set-buffer original-buffer)
+    nil))
+
 (defun hermes--async-command (name command callback &rest args)
   "Run command and feed the output to callback.
 If more multiple commands are given, runs them in parallel."
   (declare (indent 1))
   (setq args (cl-remove-if-not #'identity args))
-  (when (or (null hermes--async-command-buffer)
-            (not (buffer-live-p hermes--async-command-buffer)))
-    (with-current-buffer
-        (setq hermes--async-command-buffer
-              (get-buffer-create (concat " CMD " (buffer-name))))
-      (hermes-process-output-mode t)))
   (let* ((process-connection-type nil)
          (proc (apply #'start-file-process
                       (or name command)
@@ -512,7 +529,13 @@ If more multiple commands are given, runs them in parallel."
 
 (defun hermes--run-hg-command (name command callback &rest args)
   (declare (indent 1))
-  (apply #'hermes--async-command
+  (apply (if (file-remote-p default-directory)
+             ;; Over tramp, start-file-process seems creating new ssh
+             ;; connection for each command. shell-command runs faster
+             ;; since it runs over the existing connection but
+             ;; sequentially.
+             #'hermes--sync-command
+          #'hermes--async-command)
          name
          (car hermes--hg-commands)
          callback
