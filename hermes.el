@@ -360,6 +360,21 @@
 (defvar hermes--async-command-buffer nil)
 (put 'hermes--async-command-buffer 'permanent-local t)
 
+(defvar hermes--async-pending-command-count 0)
+(put 'hermes--async-pending-command-count 'permanent-local t)
+
+(defun hermes--async-update-pending (n &optional cmdline)
+  (setq hermes--async-pending-command-count (+ n hermes--async-pending-command-count))
+  (setq mode-line-process
+        (if (zerop hermes--async-pending-command-count)
+            nil
+          (propertize (concat " "
+                              (if cmdline cmdline "")
+                              (if (> hermes--async-pending-command-count 1) " (and more" "")
+                              "...")
+                      'font-lock-face 'mode-line-emphasis)))
+  (force-mode-line-update))
+
 (defun hermes-show-last-command ()
   (interactive)
   (and hermes--async-command-buffer
@@ -382,7 +397,8 @@
                                            'invisible t))))))
       (condition-case err
           (with-current-buffer command-buffer
-            (funcall callback output))
+            (funcall callback output)
+            (hermes--async-update-pending -1))
         (error
          (message "hermes command error: %s" err))))))
 (defun hermes-process-send-string ()
@@ -506,17 +522,20 @@ If more multiple commands are given, runs them in parallel."
          (proc (apply #'start-file-process
                       (or name command)
                       hermes--async-command-buffer
-                      command args)))
+                      command args))
+         (cmdline (mapconcat #'identity (cons command args) " ")))
+    (when (string-match (concat "^"
+                                (regexp-quote (mapconcat #'identity hermes--hg-commands " "))
+                                " \\(.*\\)$")
+                        cmdline)
+      (setq cmdline (concat "hg " (match-string 1 cmdline))))
+    (hermes--async-update-pending +1 cmdline)
+    (force-mode-line-update)
+    (redisplay)
     (set-process-buffer proc hermes--async-command-buffer)
     (with-current-buffer hermes--async-command-buffer
       (goto-char (point-max))
-      (let ((inhibit-read-only t)
-            (cmdline (mapconcat #'identity (cons command args) " ")))
-        (when (string-match (concat "^"
-                                    (regexp-quote (mapconcat #'identity hermes--hg-commands " "))
-                                    " \\(.*\\)$")
-                            cmdline)
-          (setq cmdline (concat "hg " (match-string 1 cmdline))))
+      (let ((inhibit-read-only t))
         (insert (propertize (concat (if (= (point) (point-at-bol)) "" "\n")
                                     "$ " cmdline "\n\n")
                             'face 'bold
