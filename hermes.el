@@ -1340,7 +1340,10 @@ With prefix argument, use the read revision instead of current revision."
                                                   (get-buffer (format "*hermes[%s]*" name))))))
       (setq name (concat name "|" (pop rpaths))))
     (let ((default-directory directory))
-      (with-current-buffer (or buffer (get-buffer-create (format "*hermes[%s]*" name)))
+      (with-current-buffer (or buffer (with-current-buffer
+                                          (get-buffer-create (format "*hermes[%s]*" name))
+                                        (setq hermes--async-pending-command-count 0)k
+                                        (current-buffer)))
         (display-buffer (current-buffer))
         (unless (derived-mode-p 'hermes-mode)
           (setq refresh t)
