@@ -116,27 +116,28 @@
               (propertize (oref data file) 'face 'underline)
               (oref data file))))
 (cl-defmethod hermes--print ((data hermes--hunk))
-  (let* ((hunk-header (car (oref data lines)))
-         (line-num (and (string-match
-                         "@@ -[0-9]+,[0-9]+ [+]\\([0-9]+\\),"
-                         hunk-header)
-                        (string-to-number (match-string 1 hunk-header)))))
-    (dolist (line (oref data lines))
-      (let ((face (cond ((string-match "^=" line)
-                         'bold)
-                        ((string-match "^-" line)
-                         'diff-removed)
-                        ((string-match "^[+]" line)
-                         'diff-added)
-                        (t
-                         'diff-context))))
-        (insert (propertize line 'face face))
-        (when line-num
-          (put-text-property (point-at-bol) (point-at-eol)
-                             'hermes-line-num line-num)
-          (unless (member (char-after (point-at-bol)) '(?- ?@))
-            (cl-incf line-num)))
-        (insert "\n")))))
+  (when (oref data lines)
+    (let* ((hunk-header (car (oref data lines)))
+           (line-num (and (string-match
+                           "@@ -[0-9]+,[0-9]+ [+]\\([0-9]+\\),"
+                           hunk-header)
+                          (string-to-number (match-string 1 hunk-header)))))
+      (dolist (line (oref data lines))
+        (let ((face (cond ((string-match "^=" line)
+                           'bold)
+                          ((string-match "^-" line)
+                           'diff-removed)
+                          ((string-match "^[+]" line)
+                           'diff-added)
+                          (t
+                           'diff-context))))
+          (insert (propertize line 'face face))
+          (when line-num
+            (put-text-property (point-at-bol) (point-at-eol)
+                               'hermes-line-num line-num)
+            (unless (member (char-after (point-at-bol)) '(?- ?@))
+              (cl-incf line-num)))
+          (insert "\n"))))))
 (cl-defmethod hermes--print ((data hermes--shelve))
   (insert (propertize (format "%-20.20s" (oref data name)) 'face 'font-lock-keyword-face)
           (propertize (format "%-10.10s" (oref data when)) 'face 'font-lock-comment-face)
@@ -167,12 +168,16 @@
       (hermes--show-file-hunks node data)
     (let* ((callback (lambda (o)
                        (setf (oref data hunks)
-                             (mapcar (lambda (hunk)
-                                       (hermes--hunk
+                             (or (mapcar (lambda (hunk)
+                                           (hermes--hunk
+                                            :expandable nil
+                                            :lines (split-string (concat "@@" hunk) "\n")
+                                            :parent data))
+                                         (cdr (split-string o "\n@@" t)))
+                                 (list (hermes--hunk
                                         :expandable nil
-                                        :lines (split-string (concat "@@" hunk) "\n")
-                                        :parent data))
-                                     (cdr (split-string o "\n@@" t))))
+                                        :lines nil
+                                        :parent data))))
                        (hermes--expand data node)))
            (status (oref data status))
            (filename (oref data file)))
