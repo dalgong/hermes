@@ -151,12 +151,17 @@
 (cl-defmethod hermes--item-string ((data t))
   (oref data file))
 
+(defun hermes--insert (data &optional after)
+  (let ((node (if after
+                  (ewoc-enter-after hermes--ewoc after data)
+                (ewoc-enter-last hermes--ewoc data))))
+    (when data
+      (setf (oref data node) node))))
+
 (cl-defgeneric hermes--expand (data node &optional force))
 (cl-defmethod hermes--expand ((data hermes--changeset) node &optional force)
   (if (and (oref data files) (not force))
-      (dolist (f (oref data files))
-        (setf (oref f node)
-              (ewoc-enter-after hermes--ewoc node f)))
+      (mapc (lambda (f) (hermes--insert f node)) (oref data files))
     (hermes--run-hg-command "Showing revision"
       "status"
       (lambda (o)
@@ -196,9 +201,7 @@
                filename))))))
 (cl-defmethod hermes--expand ((data hermes--shelve) node &optional force)
   (if (and (oref data files) (not force))
-      (dolist (file (oref data files))
-        (setf (oref file node)
-              (ewoc-enter-after hermes--ewoc node file)))
+      (mapc (lambda (f) (hermes--insert f node)) (oref data files))
     (hermes--run-hg-command "Expanding shelve"
       "shelve"
       (lambda (o)
@@ -783,8 +786,7 @@ If more multiple commands are given, runs them in parallel."
 
 (defun hermes--show-file-hunks (node file)
   (dolist (hunk (oref file hunks))
-    (setq node (setf (oref hunk node)
-                     (ewoc-enter-after hermes--ewoc node hunk)))))
+    (setq node (hermes--insert hunk node))))
 
 (defun hermes-toggle-expand ()
   "Expand or shrink current node.
@@ -806,8 +808,7 @@ When a prefix argument is given while expanding, recompute childrens."
          (inhibit-read-only t))
     (when-let (fn (and data (oref data refresh)))
       (funcall fn data)
-      (setf (oref data node)
-            (ewoc-enter-after hermes--ewoc node data))
+      (hermes--insert data node)
       (ewoc-delete node))))
 
 (defun hermes--current-data ()
@@ -1295,19 +1296,13 @@ With prefix argument, use the read revision instead of current revision."
       (with-current-buffer hermes-buffer
         (let (buffer-read-only)
           (when (oref modified files)
-            (hermes--expand modified (setf (oref modified node)
-                                           (ewoc-enter-last hermes--ewoc modified)))
-            (ewoc-enter-last hermes--ewoc nil))
+            (hermes--expand modified (hermes--insert modified))
+            (hermes--insert nil))
           (when recents
-            (dolist (changeset recents)
-              (setf (oref changeset node)
-                    (ewoc-enter-last hermes--ewoc changeset)))
+            (mapc #'hermes--insert recents)
             (when shelves
-              (ewoc-enter-last hermes--ewoc nil)))
-          (when shelves
-            (dolist (shelve shelves)
-              (setf (oref shelve node)
-                    (ewoc-enter-last hermes--ewoc shelve))))))
+              (hermes--insert nil)))
+          (mapc #'hermes--insert shelves)))
       (progress-reporter-done reporter))))
 
 (defun hermes-read-root-dir ()
@@ -1342,7 +1337,7 @@ With prefix argument, use the read revision instead of current revision."
     (let ((default-directory directory))
       (with-current-buffer (or buffer (with-current-buffer
                                           (get-buffer-create (format "*hermes[%s]*" name))
-                                        (setq hermes--async-pending-command-count 0)k
+                                        (setq hermes--async-pending-command-count 0)
                                         (current-buffer)))
         (display-buffer (current-buffer))
         (unless (derived-mode-p 'hermes-mode)
