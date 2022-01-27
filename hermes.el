@@ -35,18 +35,27 @@
                        string-end)
                    #'with-editor-mode))
 
-(defvar hermes--log-revset "reverse(.~3::)")
 (defvar hermes--hg-commands
   '("hg"
     "--color=never"
     "--pager=never"
     "--config" "ui.merge=internal:merge3"))
+
+(defvar hermes--log-revset "reverse(.~3::)")
 (defvar hermes--log-template
   (concat "changeset: {node|short}\\n"
           "summary: {desc|firstline}\\n"
           "date: {date|age}\\n"
           "{parents % \"parent: {node|short}\\n\"}"
           "{tags % \"tag: {tag}\\n\"}"))
+(defvar hermes-status-items
+  `((status "status" hermes--parse-status
+            "--verbose")
+    (shelve "shelve" hermes--parse-shelves
+            "--list")
+    (log    "log"    hermes--parse-changesets
+            "--debug" "-G" "-T" ,hermes--log-template "-r" ,hermes--log-revset))
+  "A list of items to show in *hermes* buffer.")
 
 (defclass hermes--base ()
   ((parent      :initarg :parent      :initform nil)
@@ -156,7 +165,9 @@
                   (ewoc-enter-after hermes--ewoc after data)
                 (ewoc-enter-last hermes--ewoc data))))
     (when data
-      (setf (oref data node) node))))
+      (setf (oref data node) node)
+      (when (oref data expanded)
+        (hermes--expand data node)))))
 
 (cl-defgeneric hermes--expand (data node &optional force))
 (cl-defmethod hermes--expand ((data hermes--changeset) node &optional force)
@@ -165,7 +176,7 @@
     (hermes--run-hg-command "Showing revision"
       "status"
       (lambda (o)
-        (hermes--parse-status-files data o (oref data rev))
+        (hermes--parse-status-files o data)
         (hermes--expand data node))
       "--change" (oref data rev))))
 (cl-defmethod hermes--expand ((data hermes--file) node &optional force)
@@ -690,14 +701,20 @@ If more multiple commands are given, runs them in parallel."
       (cl-callf nreverse (oref c child-revs))))
   changesets)
 
-(defun hermes--parse-status-files (parent o &optional rev)
+(defun hermes--parse-status-files (o parent)
   (setf (oref parent files)
         (mapcar (lambda (line)
                   (hermes--file :file (substring line 2)
-                                :rev rev
+                                :rev (oref parent rev)
                                 :status (substring line 0 1)
                                 :parent parent))
                 (split-string (ansi-color-filter-apply o) "\n" t))))
+(defun hermes--parse-status (o)
+  (let ((c (hermes--changeset :title "Pending changes"
+                              :rev nil
+                              :expanded t)))
+    (and (hermes--parse-status-files o c)
+         (list c))))
 
 (defun hermes--parse-shelves (o)
   (remove nil (mapcar (lambda (line)
@@ -971,7 +988,10 @@ With prefix argument, use the read revision instead of current revision."
 (defun hermes-goto-head-revision ()
   "Jump to current revision."
   (interactive)
-  (hermes-goto-revision (hermes--head-revision)))
+  (let ((rev (hermes--head-revision)))
+    (unless rev
+      (error "Could not figure out head revision."))
+    (hermes-goto-revision rev)))
 
 (defun hermes-show-revision ()
   "Show revision details."
@@ -1260,49 +1280,37 @@ With prefix argument, use the read revision instead of current revision."
   (when (eq major-mode 'hermes-mode)
     (let* ((hermes-buffer (current-buffer))
            (reporter (make-progress-reporter "Refreshing..."))
-           (modified (hermes--changeset
-                      :title "Pending changes"
-                      :rev nil
-                      :expanded t))
-           recents parents shelves)
+           items need-separator)
       (with-current-buffer hermes-buffer
         (let (buffer-read-only)
           (ewoc-filter hermes--ewoc (lambda (_) nil))))
 
-      (dolist (p (list
-                  (hermes--run-hg-command nil
-                    "status"
-                    (lambda (o) (hermes--parse-status-files modified o))
-                    "--verbose")
-                  (hermes--run-hg-command nil
-                    "parent"
-                    (lambda (o) (setq parents (mapcar (lambda (o) (oref o rev))
-                                                      (hermes--parse-changesets o)))))
-                  (hermes--run-hg-command nil
-                    "shelve"
-                    (lambda (o) (setq shelves (hermes--parse-shelves o)))
-                    "--list")
-                  (hermes--run-hg-command nil
-                    "log"
-                    (lambda (o) (setq recents (hermes--parse-changesets o)))
-                    "--debug" "-G"
-                    "-T" hermes--log-template
-                    "-r" hermes--log-revset)))
+      (dolist (p (mapcar (lambda (e)
+                           (let ((key (cl-first e))
+                                 (parser (cl-third e)))
+                             (apply #'hermes--run-hg-command nil
+                                    (cl-second e)
+                                    (lambda (o) (push (cons key (funcall parser o)) items))
+                                    (nthcdr 3 e))))
+                         (cons `(parent "parent" list "-T" "{node|short}")
+                               hermes-status-items)))
         (while (process-live-p p)
           (sleep-for 0.05)))
-      (dolist (changeset recents)
-        (when (cl-find (oref changeset rev) parents :test #'string=)
-          (setf (oref changeset current) t)))
-      (with-current-buffer hermes-buffer
-        (let (buffer-read-only)
-          (when (oref modified files)
-            (hermes--expand modified (hermes--insert modified))
+      (let ((parents (alist-get 'parent items)))
+        (dolist (p items)
+          (mapc (lambda (c)
+                  (when (and c
+                             (hermes--changeset-p c)
+                             (oref c rev)
+                             (cl-find (oref c rev) parents :test #'string=))
+                    (setf (oref c current) t)))
+                (and (listp (cdr p)) (cdr p)))))
+      (dolist (k (mapcar #'car hermes-status-items))
+        (when-let (values (alist-get k items))
+          (when need-separator
             (hermes--insert nil))
-          (when recents
-            (mapc #'hermes--insert recents)
-            (when shelves
-              (hermes--insert nil)))
-          (mapc #'hermes--insert shelves)))
+          (mapc #'hermes--insert values)
+          (setq need-separator t)))
       (progress-reporter-done reporter))))
 
 (defun hermes-read-root-dir ()
