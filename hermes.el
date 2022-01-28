@@ -376,9 +376,6 @@
         (oref data name)))))
 
 ;; process invocation
-(defvar hermes--async-command-buffer nil)
-(put 'hermes--async-command-buffer 'permanent-local t)
-
 (defvar hermes--async-pending-command-count 0)
 (put 'hermes--async-pending-command-count 'permanent-local t)
 
@@ -394,30 +391,56 @@
                       'font-lock-face 'mode-line-emphasis)))
   (force-mode-line-update))
 
+(defvar hermes--async-command-buffer nil)
+(put 'hermes--async-command-buffer 'permanent-local t)
+
+(defun hermes--log-command-start (cmdline proc)
+  (unless (buffer-live-p hermes--async-command-buffer)
+    (error "command buffer is not alive!"))
+  (hermes--async-update-pending +1 cmdline)
+  (set-process-buffer proc hermes--async-command-buffer)
+  (with-current-buffer hermes--async-command-buffer
+    (goto-char (point-max))
+    (let ((inhibit-read-only t))
+      (insert (propertize (concat (if (= (point) (point-at-bol)) "" "\n")
+                                  "$ " cmdline "\n\n")
+                          'face 'bold
+                          'proc proc)))
+    (process-put proc 'start (set-marker (make-marker) (- (point) 2)))
+    (set-marker (process-mark proc) (1- (point)))))
+
+(defun hermes--log-command-finish (proc)
+  (when (buffer-live-p (process-get proc 'command-buffer))
+    (with-current-buffer (process-get proc 'command-buffer))
+    (hermes--async-update-pending -1))
+  (unless (buffer-live-p (process-buffer proc))
+    (error "command buffer is not alive!"))
+  (with-current-buffer (process-buffer proc)
+    (let ((inhibit-read-only t))
+      (goto-char (process-get proc 'start))
+      (apply #'put-text-property
+             (list (point-at-bol 1) (point-at-bol 2) 'face 'shadow))
+      (prog1
+          (buffer-substring-no-properties (1+ (point))
+                                          (marker-position (process-mark proc)))
+        (hermes-backward-process 1)
+        (put-text-property (process-get proc 'start) (process-mark proc)
+                           'invisible t)))))
+
 (defun hermes-show-last-command ()
   (interactive)
   (and hermes--async-command-buffer
        (buffer-live-p hermes--async-command-buffer)
        (display-buffer hermes--async-command-buffer)))
+
 (defun hermes--process-sentinel (proc event)
   (when (memq (process-status proc) '(exit signal))
     (let ((command-buffer (process-get proc 'command-buffer))
           (callback (process-get proc 'callback))
-          (output (with-current-buffer (process-buffer proc)
-                    (let ((inhibit-read-only t))
-                      (goto-char (process-get proc 'start))
-                      (apply #'put-text-property
-                             (list (point-at-bol 1) (point-at-bol 2) 'face 'shadow))
-                      (prog1
-                          (buffer-substring-no-properties (1+ (point))
-                                                          (marker-position (process-mark proc)))
-                        (hermes-backward-process 1)
-                        (put-text-property (process-get proc 'start) (process-mark proc)
-                                           'invisible t))))))
+          (output (hermes--log-command-finish proc)))
       (condition-case err
           (with-current-buffer command-buffer
-            (funcall callback output)
-            (hermes--async-update-pending -1))
+            (funcall callback output))
         (error
          (message "hermes command error: %s" err))))))
 (defun hermes-process-send-string ()
@@ -437,15 +460,16 @@
       (error "No active process at point."))
     (process-send-eof proc)))
 (defun hermes--process-filter (proc string)
-  (with-current-buffer (process-buffer proc)
-    (let ((inhibit-read-only t))
-      (goto-char (process-mark proc))
-      (insert (propertize string
-                          'proc proc
-                          'face 'diff-context
-                          'line-prefix "  "))
-      (set-marker (process-mark proc) (point))
-      (hermes-backward-process 1))))
+  (when (buffer-live-p (process-buffer proc))
+    (with-current-buffer (process-buffer proc)
+      (let ((inhibit-read-only t))
+        (goto-char (process-mark proc))
+        (insert (propertize string
+                            'proc proc
+                            'face 'diff-context
+                            'line-prefix "  "))
+        (set-marker (process-mark proc) (point))
+        (hermes-backward-process 1)))))
 
 (defun hermes-process-quit ()
   (interactive)
@@ -488,7 +512,7 @@
 (defvar hermes-process-output-mode-map
   (let ((m (make-sparse-keymap)))
     (suppress-keymap m)
-    (define-key m (kbd "C-g") #'hermes-process-kill)
+    (define-key m (kbd "k") #'hermes-process-kill)
     (define-key m (kbd "c") #'hermes-process-clear)
     (define-key m (kbd "n") #'hermes-forward-process)
     (define-key m (kbd "p") #'hermes-backward-process)
@@ -531,8 +555,7 @@
 If more multiple commands are given, runs them in parallel."
   (declare (indent 1))
   (setq args (cl-remove-if-not #'identity args))
-  (when (or (null hermes--async-command-buffer)
-            (not (buffer-live-p hermes--async-command-buffer)))
+  (unless (buffer-live-p hermes--async-command-buffer)
     (with-current-buffer
         (setq hermes--async-command-buffer
               (get-buffer-create (concat " CMD " (buffer-name))))
@@ -548,27 +571,11 @@ If more multiple commands are given, runs them in parallel."
                                 " \\(.*\\)$")
                         cmdline)
       (setq cmdline (concat "hg " (match-string 1 cmdline))))
-    (hermes--async-update-pending +1 cmdline)
-    (force-mode-line-update)
-    (redisplay)
-    (set-process-buffer proc hermes--async-command-buffer)
-    (with-current-buffer hermes--async-command-buffer
-      (goto-char (point-max))
-      (let ((inhibit-read-only t))
-        (insert (propertize (concat (if (= (point) (point-at-bol)) "" "\n")
-                                    "$ " cmdline "\n\n")
-                            'face 'bold
-                            'proc proc)))
-      (process-put proc 'start (set-marker (make-marker) (- (point) 2)))
-      (set-marker (process-mark proc) (1- (point))))
+    (hermes--log-command-start cmdline proc)
     (with-editor-set-process-filter proc #'hermes--process-filter)
     (set-process-sentinel           proc #'hermes--process-sentinel)
     (process-put proc 'command-buffer (current-buffer))
     (process-put proc 'callback callback)
-    (when nil
-      (with-current-buffer nil
-        (process-send-region proc (point-min) (point-max))
-        (process-send-eof    proc)))
     proc))
 
 (defun hermes--run-hg-command (name command callback &rest args)
@@ -600,8 +607,8 @@ If more multiple commands are given, runs them in parallel."
     (hermes-show-last-command)
     (with-current-buffer hermes--async-command-buffer
       (goto-char (point-max))
-      (backward-page 1)
-      (narrow-to-region (1+ (point)) (point-max)))))
+      (hermes-backward-process 1)
+      (narrow-to-region (1+ (point-at-eol)) (point-max)))))
 
 ;; printers
 (defvar hermes--ewoc nil)
@@ -999,7 +1006,7 @@ With prefix argument, use the read revision instead of current revision."
   (let ((data (hermes--current-changeset)))
     (when-let (rev (and (oref data rev)))
       (hermes--run-hg-command (format "showing %s" rev)
-        "show"
+        "diff"
         (lambda (o)
           (with-current-buffer (get-buffer-create (format "*hermes-show[%s]*" rev))
             (setq buffer-read-only nil)
@@ -1009,7 +1016,7 @@ With prefix argument, use the read revision instead of current revision."
             (diff-mode)
             (view-mode 1)
             (display-buffer (current-buffer))))
-        "-g" rev))))
+        "-g" "-c" rev))))
 
 (defun hermes-mark-unmark ()
   "Toggle the mark of a file."
