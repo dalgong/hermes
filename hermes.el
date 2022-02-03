@@ -167,7 +167,8 @@
     (when data
       (setf (oref data node) node)
       (when (oref data expanded)
-        (hermes--expand data node)))))
+        (hermes--expand data node)))
+    node))
 
 (cl-defgeneric hermes--expand (data node &optional force))
 (cl-defmethod hermes--expand ((data hermes--changeset) node &optional force)
