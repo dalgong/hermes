@@ -840,13 +840,16 @@ When a prefix argument is given while expanding, recompute childrens."
   (when-let (node (ewoc-locate hermes--ewoc))
     (ewoc-data node)))
 
-(defun hermes--current-rev-or-error ()
+(defun hermes--current-revision-or-error ()
   (let ((data (hermes--current-data)))
     (while (and data (not (eq (type-of data) 'hermes--changeset)))
       (setq data (oref data parent)))
     (unless data
       (error "Not on a changeset."))
-    (oref data rev)))
+    data))
+
+(defun hermes--current-rev-or-error ()
+  (oref (hermes--current-revision-or-error) rev))
 
 (defun hermes-visit ()
   "Do appropriate actions on the current node.
@@ -959,10 +962,10 @@ With prefix argument, use the read revision instead of current revision."
               hermes--ewoc)
     datas))
 
-(defun hermes--read-revision (prompt &optional initial-input history)
+(defun hermes--read-revision (prompt &optional revisions initial-input history)
   (let* ((revs (mapcar (lambda (d) (cons (hermes--format-changeset-line d)
                                          (oref d summary)))
-                       (cl-remove-if-not #'identity (hermes--all-revisions))))
+                       (cl-remove-if-not #'identity (or revisions (hermes--all-revisions)))))
          (max-size (and revs (apply #'max (mapcar #'length (mapcar #'car revs))))))
     (car (split-string (completing-read prompt
                                         (mapcar (lambda (e)
@@ -983,6 +986,25 @@ With prefix argument, use the read revision instead of current revision."
                          (string-match (concat "^" (oref data rev)) rev))
                 (goto-char (ewoc--node-start-marker (oref data node)))))
             hermes--ewoc))
+
+(defun hermes--goto-among-revisions (candidates)
+  (when candidates
+    (hermes-goto-revision
+     (if (= 1 (length candidates))
+         (oref (car candidates) rev)
+       (hermes--read-revision "Choose revision? " candidates)))))
+
+(defun hermes-goto-parent-revision ()
+  "Jump to a parent revision."
+  (interactive)
+  (let ((current-revision (hermes--current-revision-or-error)))
+    (hermes--goto-among-revisions (oref current-revision parent-revs))))
+
+(defun hermes-goto-child-revision ()
+  "Jump to a child revision."
+  (interactive)
+  (let ((current-revision (hermes--current-revision-or-error)))
+    (hermes--goto-among-revisions (oref current-revision child-revs))))
 
 (defun hermes--head-revision ()
   (let (d)
@@ -1260,6 +1282,8 @@ With prefix argument, use the read revision instead of current revision."
     (define-key map "r" #'hermes-rebase)
     (define-key map "n" #'hermes-goto-next)
     (define-key map "p" #'hermes-goto-prev)
+    (define-key map "N" #'hermes-goto-child-revision)
+    (define-key map "P" #'hermes-goto-parent-revision)
     (define-key map (kbd "M-n") #'hermes-goto-next-same-level)
     (define-key map (kbd "M-p") #'hermes-goto-prev-same-level)
     (define-key map (kbd "C-M-u") #'hermes-goto-up-level)
