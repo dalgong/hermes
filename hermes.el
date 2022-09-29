@@ -1106,7 +1106,7 @@ With prefix argument, use the read revision instead of current revision."
     ("c" "Continue"      hermes-resolve-continue)
     ("m" "Mark resolved" hermes-resolve-mark)]])
 (defun hermes--sanitize-filename (filename)
-  (when (string-match "^    \\(.*\\)$" filename)
+  (when (string-match "^    \\([^ \t]*\\)$" filename)
     (match-string 1 filename)))
 (defun hermes-resolve--get-status ()
   (let (abort-cmd continue-cmd unresolved-files)
@@ -1122,7 +1122,7 @@ With prefix argument, use the read revision instead of current revision."
                               ((and (= 2 (length parts))
                                     (string= (car parts) "To continue"))
                                (setq continue-cmd (cdr (split-string (cl-second parts)))))
-                              ((and parts
+                              ((and (= 1 (length parts))
                                     (setq parts (hermes--sanitize-filename (car parts))))
                                (push parts unresolved-files))))))))
               hermes--ewoc)
