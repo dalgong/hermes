@@ -41,7 +41,12 @@
     "--pager=never"
     "--config" "ui.merge=internal:merge3"))
 
-(defvar hermes--log-revset "reverse(.~3::)")
+(defvar hermes--log-revset
+  (mapconcat #'identity
+             '("(parents(not public()) or not public() or . or head())"
+               "(not obsolete() or unstable()^)"
+               "not closed()")
+             " and "))
 (defvar hermes--log-template
   (concat "changeset: {node|short}\\n"
           "summary: {desc|firstline}\\n"
