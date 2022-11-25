@@ -1186,7 +1186,8 @@ With prefix argument, use the read revision instead of current revision."
     ("d" "Duplicate" hermes-commit-duplicate)
     ("u" "Uncommit"  hermes-commit-uncommit)]
    ["Edit HEAD"
-    ("a" "Amend"     hermes-commit-amend)]])
+    ("a" "Amend"     hermes-commit-amend)
+    ("A" "Amend This"hermes-commit-amend-this)]])
 (defun hermes-commit-duplicate ()
   "Create a duplicate change."
   (interactive)
@@ -1223,6 +1224,17 @@ With prefix argument, use the read revision instead of current revision."
                              form))
                      (cons 'progn form))))
   (def "commit" "amend"))
+(defun hermes-commit-amend-this (&optional args)
+  "Run hg ammend to the revision"
+  (interactive (list (transient-args 'hermes-commit)))
+  (let ((rev (hermes--current-rev-or-error)))
+    (hermes--run-interactive-command "amend"
+      (append hermes--hg-commands
+              (list "amend" "--to" rev)
+              args
+              (hermes--marked-filenames))
+      #'hermes-refresh
+      (member "--interactive" args))))
 
 (transient-define-prefix hermes-phase ()
   "Set or show the current phase name."
