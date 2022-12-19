@@ -1283,7 +1283,6 @@ With prefix argument, use the read revision instead of current revision."
     (define-key map (kbd "TAB") #'hermes-toggle-expand)
     (define-key map (kbd "RET") #'hermes-visit)
     (define-key map "." #'hermes-goto-head-revision)
-    (define-key map "j" #'hermes-goto-revision)
     (define-key map "A" #'hermes-addremove)
     (define-key map "c" #'hermes-commit)
     (define-key map "d" #'hermes-show-revision)
@@ -1397,12 +1396,23 @@ With prefix argument, use the read revision instead of current revision."
                                           (get-buffer-create (format "*hermes[%s]*" name))
                                         (setq hermes--async-pending-command-count 0)
                                         (current-buffer)))
+        (setq-local imenu-create-index-function #'hermes-imenu-create-index)
         (display-buffer (current-buffer))
         (unless (derived-mode-p 'hermes-mode)
           (setq refresh t)
           (hermes-mode))
         (when refresh
           (hermes-refresh))))))
+
+(defun hermes-imenu-create-index ()
+  "Create imenu index."
+  (setq imenu--index-alist nil)
+  (dolist (d (hermes--all-revisions))
+    (push (list (concat (hermes--format-changeset-line d) " " (oref d summary))
+                (oref d rev)
+                (lambda (_ rev) (hermes-goto-revision rev)))
+          imenu--index-alist))
+  imenu--index-alist)
 
 (provide 'hermes)
 ;;; hermes.el ends here
