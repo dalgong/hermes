@@ -1408,11 +1408,25 @@ With prefix argument, use the read revision instead of current revision."
   "Create imenu index."
   (setq imenu--index-alist nil)
   (dolist (d (hermes--all-revisions))
-    (push (list (concat (hermes--format-changeset-line d) " " (oref d summary))
-                (oref d rev)
-                (lambda (_ rev) (hermes-goto-revision rev)))
-          imenu--index-alist))
+    (when (oref d rev)
+      (push (list (concat (hermes--format-changeset-line d) " " (oref d summary))
+                  (oref d rev)
+                  (lambda (_ rev) (hermes-goto-revision rev)))
+            imenu--index-alist)))
   imenu--index-alist)
+
+;; register integration:
+;; (set-register r (hermes-repo-make-register "/path/to/mecurial repo/"))
+(cl-defstruct (hermes-repo
+               (:constructor nil)
+               (:constructor hermes-repo-make-register (dir)))
+  dir)
+(cl-defmethod register-val-jump-to ((data hermes-repo) _arg)
+  (hermes (hermes-repo-dir data)))
+(cl-defmethod register-val-describe ((data hermes-repo) _verbose)
+  (princ (format "A mercurial repository: %s" (hermes-repo-dir data))))
+(cl-defmethod register-val-insert ((data hermes-repo))
+  (insert (hermes-repo-dir data)))
 
 (provide 'hermes)
 ;;; hermes.el ends here
