@@ -111,14 +111,9 @@
                 (propertize (oref data title) 'face 'bold))
       (insert (hermes--indent data t)
               (hermes--format-changeset-line data faces))
-      (let* ((date (cadr (assq 'date (oref data props))))
-             (padding (and date
-                           (- (window-width)
-                              (current-column)
-                              (length date)
-                              1))))
-        (when (and date (> padding 0))
-          (insert (make-string padding ?\s)
+      (let* ((date (cadr (assq 'date (oref data props)))))
+        (when date
+          (insert (propertize " " 'display `(space :align-to (- right-fringe ,(1+ (length date)))))
                   (propertize date 'face 'font-lock-doc-face))))
       (insert "\n"
               (hermes--indent data)
