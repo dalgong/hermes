@@ -644,7 +644,7 @@ If more multiple commands are given, runs them in parallel."
 
 (defun hermes-printer (data)
   (if (null data)
-      (insert "\n" (make-string (1- (window-width)) ?-))
+      (insert "\n" (make-string (1- (window-width)) ?─))
     (hermes--print data)))
 
 ;; parsers
