@@ -1307,7 +1307,7 @@ With prefix argument, use the read revision instead of current revision."
   "Major mode for *hermes* buffers.
 
 \\{hermes-mode-map}"
-  (setq revert-buffer-function #'hermes-refresh)
+  (setq-local revert-buffer-function #'hermes-refresh)
   (setq buffer-read-only nil)
   (buffer-disable-undo)
   (erase-buffer)
