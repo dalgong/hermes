@@ -417,10 +417,15 @@
   (unless (buffer-live-p (process-buffer proc))
     (error "command buffer is not alive!"))
   (with-current-buffer (process-buffer proc)
-    (let ((inhibit-read-only t))
+    (let ((inhibit-read-only t)
+          (success (zerop (process-exit-status proc))))
       (goto-char (process-get proc 'start))
       (apply #'put-text-property
-             (list (point-at-bol 1) (point-at-bol 2) 'face 'shadow))
+             (list (point-at-bol 1) (point-at-bol 2) 'face (if success 'shadow 'error)))
+      (unless success
+        (message "Run failed: %s"
+                 (buffer-substring-no-properties (point-at-bol 1) (point-at-bol 2)))
+        (sit-for 1))
       (prog1
           (buffer-substring-no-properties (1+ (point))
                                           (marker-position (process-mark proc)))
