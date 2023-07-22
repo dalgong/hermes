@@ -343,7 +343,7 @@
                      (lambda (_)
                        (delete-file temp-file))
                      "--unified" (and reverse "--reverse") "--batch"
-                     "--input" temp-file
+                     "--input" (tramp-file-local-name temp-file)
                      "--" file)))
                "-c" (oref parent rev)
                file))))))
@@ -360,7 +360,7 @@
         (lambda (_)
           (delete-file temp-file))
         "--unified" (and reverse "--reverse") "--batch"
-        "--input" temp-file "--" (oref (oref data parent) file)))))
+        "--input" (tramp-file-local-name temp-file) "--" (oref (oref data parent) file)))))
 (cl-defmethod hermes--apply ((data hermes--shelve) &optional reverse)
   (if reverse
       (when (y-or-n-p (format "Delete %s? " (oref data name)))
