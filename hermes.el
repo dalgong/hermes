@@ -967,7 +967,7 @@ With prefix argument, use the read revision instead of current revision."
               hermes--ewoc)
     datas))
 
-(defun hermes--read-revision (prompt &optional revisions initial-input history)
+(defun hermes--read-revision (prompt &optional initial-input history revisions)
   (let* ((revs (mapcar (lambda (d) (cons (hermes--format-changeset-line d)
                                          (oref d summary)))
                        (cl-remove-if-not #'identity (or revisions (hermes--all-revisions)))))
