@@ -310,6 +310,7 @@
              (if reverse "strip" "graft")
              #'ignore
              "--rev" (oref data rev))))))
+(autoload 'tramp-file-local-name "tramp" )
 (cl-defmethod hermes--apply ((data hermes--file) &optional reverse)
   (let ((parent (oref data parent))
         (file (oref data file)))
