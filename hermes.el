@@ -253,7 +253,8 @@
                                             #'find-file-other-window
                                           #'find-file)
                                         file)
-            (revert-buffer nil t))
+            (revert-buffer nil t)
+            (smerge-mode 1))
         (hermes-resolve))
     (funcall (if current-prefix-arg
                  #'find-file-other-window
@@ -718,7 +719,7 @@ If more multiple commands are given, runs them in parallel."
 (defun hermes--parse-status-files (o parent)
   (setf (oref parent files)
         (mapcar (lambda (line)
-                  (hermes--file :file (substring line 2)
+                  (hermes--file :file (hermes--sanitize-filename (substring line 2))
                                 :rev (oref parent rev)
                                 :status (substring line 0 1)
                                 :parent parent))
@@ -1108,12 +1109,15 @@ With prefix argument, use the read revision instead of current revision."
 (transient-define-prefix hermes-resolve ()
   "Create a new commit or replace an existing commit."
   [["Resolve"
-    ("a" "Abort"         hermes-resolve-abort)
-    ("c" "Continue"      hermes-resolve-continue)
-    ("m" "Mark resolved" hermes-resolve-mark)]])
+    ("a" "Abort"             hermes-resolve-abort)
+    ("c" "Continue"          hermes-resolve-continue)
+    ("m" "Mark resolved"     hermes-resolve-mark)
+    ("M" "Mark resolved all" hermes-resolve-mark-all)]])
 (defun hermes--sanitize-filename (filename)
-  (when (string-match "^    \\([^ \t]*\\)$" filename)
-    (match-string 1 filename)))
+  (save-match-data
+    (when (string-match "\\` *\\(.*\\) *\\'" filename)
+      (setq filename (match-string 1 filename))))
+  filename)
 (defun hermes-resolve--get-status ()
   (let (abort-cmd continue-cmd unresolved-files)
     (ewoc-map (lambda (data)
@@ -1129,7 +1133,8 @@ With prefix argument, use the read revision instead of current revision."
                                     (string= (car parts) "To continue"))
                                (setq continue-cmd (cdr (split-string (cl-second parts)))))
                               ((and (= 1 (length parts))
-                                    (setq parts (hermes--sanitize-filename (car parts))))
+                                    (setq parts (hermes--sanitize-filename (car parts)))
+                                    (file-exists-p parts))
                                (push parts unresolved-files))))))))
               hermes--ewoc)
     (and abort-cmd (list abort-cmd continue-cmd unresolved-files))))
@@ -1158,6 +1163,7 @@ With prefix argument, use the read revision instead of current revision."
     (and data
          (hermes--file-p data)
          (string= "#" (oref data status))
+         (file-exists-p (hermes--sanitize-filename (oref data file)))
          (hermes--sanitize-filename (oref data file)))))
 (defun hermes-resolve-mark ()
   (interactive)
@@ -1165,13 +1171,20 @@ With prefix argument, use the read revision instead of current revision."
          (files (cl-third rs)))
     (unless rs
       (error "Not in conflict resolution state."))
-    (let ((file (or (hermes-resolve--get-current-file)
-                    (completing-read "File to mark resolved: " files nil t))))
-      (with-current-buffer (find-file-noselect file)
-        (revert-buffer))
-      (hermes--run-interactive-command (format "Marking %s resolved" file)
-        (append hermes--hg-commands (list "resolve" "--mark" file))
+    (let ((files (or (hermes--marked-filenames)
+                    (list (completing-read "File to mark resolved: " files nil t)))))
+      (hermes--run-interactive-command (format "Marking %s resolved"
+                                               (mapconcat #'identity files " "))
+        (append hermes--hg-commands (cl-list* "resolve" "--mark" files))
         #'hermes-refresh))))
+(defun hermes-resolve-mark-all ()
+  (interactive)
+  (let* ((rs (hermes-resolve--get-status)))
+    (unless rs
+      (error "Not in conflict resolution state."))
+    (hermes--run-interactive-command "Marking (all) resolved"
+      (append hermes--hg-commands (list "resolve" "--mark" "--all"))
+      #'hermes-refresh)))
 
 (transient-define-prefix hermes-commit ()
   "Create a new commit or replace an existing commit."
@@ -1397,7 +1410,7 @@ With prefix argument, use the read revision instead of current revision."
                                           (get-buffer-create (format "*hermes[%s]*" name))
                                         (setq hermes--async-pending-command-count 0)
                                         (current-buffer)))
-        (setq-local imenu-create-index-function #'hermes-imenu-create-index)
+        (setq imenu-create-index-function #'hermes-imenu-create-index)
         (display-buffer (current-buffer))
         (unless (derived-mode-p 'hermes-mode)
           (setq refresh t)
