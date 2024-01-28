@@ -1378,15 +1378,20 @@ With prefix argument, use the read revision instead of current revision."
 
 (defun hermes-read-root-dir ()
   "read root dir"
-  (let ((d (vc-find-root default-directory ".hg")))
+  (let* ((witness (lambda (dir) (or (file-directory-p (concat dir "/.hg"))
+                                    (file-directory-p (concat dir "/.git")))))
+         (d (vc-find-root default-directory witness)))
     (when (or current-prefix-arg (null d))
       (setq d (vc-find-root
-               (read-directory-name "HG repository directory: ") ".hg")))
+               (read-directory-name "HG repository directory: ") witness)))
     (list d)))
 ;;;###autoload (autoload 'hermes "hermes" nil t)
-(defun hermes (&optional directory)
+(cl-defun hermes (&optional directory)
   "Starts a *hermes* buffer on current directory."
   (interactive (hermes-read-root-dir))
+  (when (and directory
+             (file-directory-p (concat directory "/.git")))
+    (cl-return-from hermes (magit-status directory)))
   (unless (or directory
               (setq directory (vc-find-root default-directory ".hg")))
     (error "No HG repository found!"))
