@@ -68,6 +68,9 @@
    (expandable  :initarg :expandable  :initform t)
    (expanded    :initarg :expanded    :initform nil)
    (refresh     :initarg :refresh     :initform nil)))
+(defclass hermes--errors (hermes--base)
+  ((command     :initarg :command     :initform nil)
+   (logs        :initarg :logs        :initform nil)))
 (defclass hermes--changeset (hermes--base)
   ((title       :initarg :title       :initform nil)
    (rev         :initarg :rev         :initform nil)
@@ -104,6 +107,10 @@
                                    'face (cons 'font-lock-keyword-face faces)))
                      (oref data tags)
                      " ")))
+(cl-defmethod hermes--print ((data hermes--errors))
+  (insert (propertize (oref data :command) 'face 'error) "\n")
+  (dolist (log (oref data :logs))
+      (insert "\t" (propertize log 'face '(italic error)) "\n")))
 (cl-defmethod hermes--print ((data hermes--changeset))
   (let ((faces (and (oref data current) (list 'bold))))
     (if (oref data title)
@@ -171,6 +178,7 @@
     node))
 
 (cl-defgeneric hermes--expand (data node &optional force))
+(cl-defmethod hermes--expand ((data hermes--errors) node &optional force))
 (cl-defmethod hermes--expand ((data hermes--changeset) node &optional force)
   (if (and (oref data files) (not force))
       (mapc (lambda (f) (hermes--insert f node)) (oref data files))
@@ -221,7 +229,7 @@
               (mapcar (lambda (f)
                         (let* ((hunks (split-string f "\n@@" t))
                                (file-line (car (split-string (pop hunks) "\n")))
-                               (filename (and (string-match " [ab]/\\([^ \\n]+\\)" file-line)
+                               (filename (and (string-match " [ab]/\\([^ \n]+\\)" file-line)
                                               (match-string 1 file-line)))
                                (file (hermes--file :file filename
                                                    :rev nil
@@ -240,6 +248,8 @@
       "-p" (oref data name))))
 
 (cl-defgeneric hermes--visit (data))
+(cl-defmethod hermes--visit ((data hermes--errors))
+  (compile (oref data :command)))
 (cl-defmethod hermes--visit ((data hermes--changeset))
   (hermes--run-hg-command (format "Updating to %s" (oref data rev))
     "update"
@@ -425,9 +435,15 @@
       (apply #'put-text-property
              (list (point-at-bol 1) (point-at-bol 2) 'face (if success 'shadow 'error)))
       (unless success
-        (message "Run failed: %s"
-                 (buffer-substring-no-properties (point-at-bol 1) (point-at-bol 2)))
-        (sit-for 1))
+        (let ((error-data (hermes--errors :command (buffer-substring-no-properties (+ 2 (point-at-bol 1)) (point-at-bol 2))
+                                          :expandable nil
+                                          :logs (split-string
+                                                 (buffer-substring-no-properties (1+ (point))
+                                                                                 (marker-position (process-mark proc)))
+                                                 "\n"))))
+          (with-current-buffer (process-get proc 'command-buffer)
+            (hermes--insert nil)
+            (hermes--insert error-data))))
       (prog1
           (buffer-substring-no-properties (1+ (point))
                                           (marker-position (process-mark proc)))
@@ -446,9 +462,12 @@
     (let ((command-buffer (process-get proc 'command-buffer))
           (callback (process-get proc 'callback))
           (output (hermes--log-command-finish proc)))
-      (condition-case err
-          (with-current-buffer command-buffer
-            (funcall callback output))
+        (condition-case err
+            (with-current-buffer command-buffer
+              (if (zerop (process-exit-status proc))
+                  (funcall callback output)
+                (when-let (error-callback (process-get proc 'error-callback))
+                  (funcall error-callback output))))
         (error
          (message "hermes command error: %s" err))))))
 (defun hermes-process-send-string ()
