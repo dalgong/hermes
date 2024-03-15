@@ -112,7 +112,7 @@
   (dolist (log (oref data :logs))
       (insert "\t" (propertize log 'face '(italic error)) "\n")))
 (cl-defmethod hermes--print ((data hermes--changeset))
-  (let ((faces (and (oref data current) (list 'bold))))
+  (let ((faces (and (oref data current) (list 'bold 'underline))))
     (if (oref data title)
         (insert (hermes--indent data)
                 (propertize (oref data title) 'face 'bold))
@@ -1336,6 +1336,8 @@ With prefix argument, use the read revision instead of current revision."
     (define-key map "P" #'hermes-goto-parent-revision)
     (define-key map (kbd "M-n") #'hermes-goto-next-same-level)
     (define-key map (kbd "M-p") #'hermes-goto-prev-same-level)
+    (define-key map (kbd "C-M-n") #'hermes-next)
+    (define-key map (kbd "C-M-p") #'hermes-prev)
     (define-key map (kbd "C-M-u") #'hermes-goto-up-level)
     (define-key map (kbd "C-M-d") #'hermes-goto-down-level)
     map)
@@ -1404,6 +1406,16 @@ With prefix argument, use the read revision instead of current revision."
       (setq d (vc-find-root
                (read-directory-name "HG repository directory: ") witness)))
     (list d)))
+
+(defun hermes-prev ()
+  "Run hg prev"
+  (interactive)
+  (hermes--run-hg-command "Updating to prev" "prev" #'hermes-refresh))
+(defun hermes-next ()
+  "Run hg next"
+  (interactive)
+  (hermes--run-hg-command "Updating to next" "next" #'hermes-refresh))
+
 ;;;###autoload (autoload 'hermes "hermes" nil t)
 (cl-defun hermes (&optional directory)
   "Starts a *hermes* buffer on current directory."
