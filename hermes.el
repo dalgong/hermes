@@ -1068,6 +1068,35 @@ With prefix argument, use the read revision instead of current revision."
                  (display-buffer (current-buffer))))
              (append (if current-prefix-arg nil '("-g" "-c")) (list rev))))))
 
+(defun hermes--file-buffer (filename rev)
+  (with-current-buffer (get-buffer-create (format "%s.~%s~" (file-name-nondirectory filename) rev))
+    (erase-buffer)
+    (call-process "hg" nil (current-buffer) nil "cat" "--rev" rev filename)
+    (set-buffer-modified-p nil)
+    (let ((buffer-file-name filename))
+      (normal-mode))
+    (current-buffer)))
+
+(defun hermes-ediff ()
+  "Run ediff on the current file."
+  (interactive)
+  (unless (or (hermes--file-p (hermes--current-data))
+              (hermes--file-p (oref (hermes--current-data) parent)))
+    (error "not a file"))
+  (let ((filename (if (hermes--file-p (hermes--current-data))
+                      (oref (hermes--current-data) file)
+                    (oref (oref (hermes--current-data) parent) file)))
+        (changeset (hermes--current-changeset))
+        bufA bufB)
+    (unless changeset
+      (error "not yet supported"))
+    (if-let (rev (oref changeset rev))
+        (setq bufA (hermes--file-buffer filename (concat rev "^"))
+              bufB (hermes--file-buffer filename rev))
+      (setq bufA (hermes--file-buffer filename (hermes--head-revision))
+            bufB (find-file-noselect filename)))
+    (ediff-buffers bufA bufB)))
+
 (defun hermes-mark-unmark ()
   "Toggle the mark of a file."
   (interactive)
@@ -1319,6 +1348,7 @@ With prefix argument, use the read revision instead of current revision."
     (define-key map "A" #'hermes-addremove)
     (define-key map "c" #'hermes-commit)
     (define-key map "d" #'hermes-show-revision)
+    (define-key map "E" #'hermes-ediff)
     (define-key map "m" #'hermes-mark-unmark)
     (define-key map "M" #'hermes-resolve)
     (define-key map "u" #'hermes-unmark-all)
