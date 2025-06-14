@@ -914,7 +914,11 @@ Others - filename."
 (defun hermes-revert ()
   "Revert changes under the point."
   (interactive)
-  (hermes--apply (hermes--current-data) 'reverse))
+  (if (hermes--marked-files)
+      (when (y-or-n-p "Revert marked files? ")
+       (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+	(mapc (lambda (d) (hermes--apply d 'reverse)) (hermes--marked-files))))
+    (hermes--apply (hermes--current-data) 'reverse)))
 
 (defun hermes--current-changeset ()
   (let ((data (hermes--current-data)))
@@ -1122,7 +1126,8 @@ With prefix argument, use the read revision instead of current revision."
                        (ewoc-data node)
                        (eq data (oref (ewoc-data node) parent)))
              (ewoc-invalidate hermes--ewoc node)
-             (setq node (ewoc-next hermes--ewoc node)))))))
+             (setq node (ewoc-next hermes--ewoc node))))))
+  (hermes-goto-next 1))
 
 (defun hermes-unmark-all ()
   "Unmark all files."
