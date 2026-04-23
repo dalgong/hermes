@@ -149,9 +149,9 @@
                            'diff-context))))
           (insert (propertize line 'face face))
           (when line-num
-            (put-text-property (point-at-bol) (point-at-eol)
+            (put-text-property (pos-bol) (pos-eol)
                                'hermes-line-num line-num)
-            (unless (member (char-after (point-at-bol)) '(?- ?@))
+            (unless (member (char-after (pos-bol)) '(?- ?@))
               (cl-incf line-num)))
           (insert "\n"))))))
 (cl-defmethod hermes--print ((data hermes--shelve))
@@ -178,7 +178,7 @@
     node))
 
 (cl-defgeneric hermes--expand (data node &optional force))
-(cl-defmethod hermes--expand ((data hermes--errors) node &optional force))
+(cl-defmethod hermes--expand ((_ hermes--errors) _ &optional _))
 (cl-defmethod hermes--expand ((data hermes--changeset) node &optional force)
   (if (and (oref data files) (not force))
       (mapc (lambda (f) (hermes--insert f node)) (oref data files))
@@ -415,7 +415,7 @@
   (with-current-buffer hermes--async-command-buffer
     (goto-char (point-max))
     (let ((inhibit-read-only t))
-      (insert (propertize (concat (if (= (point) (point-at-bol)) "" "\n")
+      (insert (propertize (concat (if (= (point) (pos-bol)) "" "\n")
                                   "$ " cmdline "\n\n")
                           'face 'bold
                           'proc proc)))
@@ -433,9 +433,9 @@
           (success (zerop (process-exit-status proc))))
       (goto-char (process-get proc 'start))
       (apply #'put-text-property
-             (list (point-at-bol 1) (point-at-bol 2) 'face (if success 'shadow 'error)))
+             (list (pos-bol 1) (pos-bol 2) 'face (if success 'shadow 'error)))
       (unless success
-        (let ((error-data (hermes--errors :command (buffer-substring-no-properties (+ 2 (point-at-bol 1)) (point-at-bol 2))
+        (let ((error-data (hermes--errors :command (buffer-substring-no-properties (+ 2 (pos-bol 1)) (pos-bol 2))
                                           :expandable nil
                                           :logs (split-string
                                                  (buffer-substring-no-properties (1+ (point))
@@ -457,7 +457,7 @@
        (buffer-live-p hermes--async-command-buffer)
        (display-buffer hermes--async-command-buffer)))
 
-(defun hermes--process-sentinel (proc event)
+(defun hermes--process-sentinel (proc _)
   (when (memq (process-status proc) '(exit signal))
     (let ((command-buffer (process-get proc 'command-buffer))
           (callback (process-get proc 'callback))
@@ -555,7 +555,7 @@
     (buffer-disable-undo)
     (setq buffer-read-only t)))
 
-(defun hermes--sync-command (name command callback &rest args)
+(defun hermes--sync-command (_ command callback &rest args)
   (declare (indent 1))
   (setq args (cl-remove-if-not #'identity args))
   (let ((original-buffer (current-buffer))
@@ -621,7 +621,7 @@ If more multiple commands are given, runs them in parallel."
                  (list command)
                  args)))
 
-(defun hermes--run-interactive-command (name command-and-args &optional callback require-terminal show)
+(defun hermes--run-interactive-command (name command-and-args &optional callback _ show)
   "Run a command and call callback with the buffer after it is done."
   (declare (indent 1))
   (with-editor
@@ -635,7 +635,7 @@ If more multiple commands are given, runs them in parallel."
     (with-current-buffer hermes--async-command-buffer
       (goto-char (point-max))
       (hermes-backward-process 1)
-      (narrow-to-region (1+ (point-at-eol)) (point-max)))))
+      (narrow-to-region (1+ (pos-eol)) (point-max)))))
 
 ;; printers
 (defvar hermes--ewoc nil)
@@ -675,9 +675,9 @@ If more multiple commands are given, runs them in parallel."
 
 ;; parsers
 (defun hermes--parse-changesets (o &optional parents)
-  "Parse 'hg log' output into hermes--changeset records."
+  "Parse `hg log' output into hermes--changeset records."
   ;; --debug option may print out some garbage at the beginnig.
-  (unless (= 0 (or (string-match ".\s+changeset: " o) -1))
+  (unless (zerop (or (string-match ".\s+changeset: " o) -1))
     (when-let (p (string-match "\n.\s+changeset: " o))
       (setq o (substring o (1+ p)))))
   (let (changesets props)
@@ -1118,9 +1118,8 @@ With prefix argument, use the read revision instead of current revision."
            (when (and (oref data expandable)
                       (not (oref data expanded)))
              (hermes-toggle-expand))
-           (mapcar (lambda (file)
-                     (cl-callf not (oref file marked)))
-                   (oref data files))
+           (dolist (file (oref data files))
+             (cl-callf not (oref file marked)))
            (setq node (ewoc-next hermes--ewoc node))
            (while (and node
                        (ewoc-data node)
@@ -1263,14 +1262,14 @@ With prefix argument, use the read revision instead of current revision."
       "graft"
       #'hermes-refresh
       "-f" "-r" rev)))
-(defun hermes-commit-absorb (&optional args)
+(defun hermes-commit-absorb (&optional _)
   (interactive)
   (apply #'hermes--run-hg-command nil
          "absorb"
          #'hermes-refresh
          "--apply-changes"
          (hermes--marked-filenames)))
-(defun hermes-commit-uncommit (&optional args)
+(defun hermes-commit-uncommit (&optional _)
   "Create a duplicate change."
   (interactive (list (transient-args 'hermes-commit)))
   (apply #'hermes--run-hg-command nil
@@ -1399,38 +1398,41 @@ With prefix argument, use the read revision instead of current revision."
   (when (eq major-mode 'hermes-mode)
     (let* ((hermes-buffer (current-buffer))
            (reporter (make-progress-reporter "Refreshing..."))
-           items need-separator)
+           (items nil)
+           (pending-count 1)
+           (done (lambda ()
+                   (when (zerop (decf pending-count))
+                     (let ((parents (alist-get 'parent items)))
+                       (dolist (p items)
+                         (mapc (lambda (c)
+                                 (when (and c
+                                            (hermes--changeset-p c)
+                                            (oref c rev)
+                                            (cl-find (oref c rev) parents :test #'string=))
+                                   (setf (oref c current) t)))
+                               (and (listp (cdr p)) (cdr p)))))
+                     (let (need-separator)
+                       (dolist (k (mapcar #'car hermes-status-items))
+                         (when-let (values (alist-get k items))
+                           (when need-separator
+                             (hermes--insert nil))
+                           (mapc #'hermes--insert values)
+                           (setq need-separator t)))))
+                   (progress-reporter-done reporter))))
+      (dolist (e (cons `(parent "parent" list "-T" "{node|short}")
+                       hermes-status-items))
+        (let ((key (cl-first e))
+              (parser (cl-third e)))
+          (apply #'hermes--run-hg-command nil
+                 (cl-second e)
+                 (lambda (o)
+                   (push (cons key (funcall parser o)) items)
+                   (funcall done))
+                 (nthcdr 3 e))))
       (with-current-buffer hermes-buffer
         (let (buffer-read-only)
           (ewoc-filter hermes--ewoc (lambda (_) nil))))
-
-      (dolist (p (mapcar (lambda (e)
-                           (let ((key (cl-first e))
-                                 (parser (cl-third e)))
-                             (apply #'hermes--run-hg-command nil
-                                    (cl-second e)
-                                    (lambda (o) (push (cons key (funcall parser o)) items))
-                                    (nthcdr 3 e))))
-                         (cons `(parent "parent" list "-T" "{node|short}")
-                               hermes-status-items)))
-        (while (process-live-p p)
-          (sleep-for 0.05)))
-      (let ((parents (alist-get 'parent items)))
-        (dolist (p items)
-          (mapc (lambda (c)
-                  (when (and c
-                             (hermes--changeset-p c)
-                             (oref c rev)
-                             (cl-find (oref c rev) parents :test #'string=))
-                    (setf (oref c current) t)))
-                (and (listp (cdr p)) (cdr p)))))
-      (dolist (k (mapcar #'car hermes-status-items))
-        (when-let (values (alist-get k items))
-          (when need-separator
-            (hermes--insert nil))
-          (mapc #'hermes--insert values)
-          (setq need-separator t)))
-      (progress-reporter-done reporter))))
+      (funcall done))))
 
 (defun hermes-read-root-dir ()
   "read root dir"
@@ -1457,7 +1459,7 @@ With prefix argument, use the read revision instead of current revision."
   (interactive (hermes-read-root-dir))
   (when (and directory
              (file-directory-p (concat directory "/.git")))
-    (cl-return-from hermes (magit-status directory)))
+    (cl-return-from hermes (magit-status-setup-buffer directory)))
   (unless (or directory
               (setq directory (vc-find-root default-directory ".hg")))
     (error "No HG repository found!"))
