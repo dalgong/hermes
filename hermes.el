@@ -1402,26 +1402,25 @@ With prefix argument, use the read revision instead of current revision."
            (pending-count (length commands))
            (done (lambda ()
                    (when (zerop (decf pending-count))
-                     (let ((parents (alist-get 'parent items)))
-                       (dolist (p items)
-                         (mapc (lambda (c)
-                                 (when (and c
-                                            (hermes--changeset-p c)
-                                            (oref c rev)
-                                            (cl-find (oref c rev) parents :test #'string=))
-                                   (setf (oref c current) t)))
-                               (and (listp (cdr p)) (cdr p)))))
-                     (let (need-separator)
-                       (dolist (k (mapcar #'car hermes-status-items))
-                         (when-let (values (alist-get k items))
-                           (when need-separator
-                             (hermes--insert nil))
-                           (mapc #'hermes--insert values)
-                           (setq need-separator t)))))
-                   (progress-reporter-done reporter))))
-      (with-current-buffer hermes-buffer
-        (let (buffer-read-only)
-          (ewoc-filter hermes--ewoc (lambda (_) nil))))
+                     (with-current-buffer hermes-buffer
+                       (let ((parents (alist-get 'parent items))
+                             buffer-read-only need-separator)
+                         (ewoc-filter hermes--ewoc #'ignore)
+                         (dolist (p items)
+                           (mapc (lambda (c)
+                                   (when (and c
+                                              (hermes--changeset-p c)
+                                              (oref c rev)
+                                              (cl-find (oref c rev) parents :test #'string=))
+                                     (setf (oref c current) t)))
+                                 (and (listp (cdr p)) (cdr p))))
+                         (dolist (k (mapcar #'car hermes-status-items))
+                           (when-let* ((values (alist-get k items)))
+                             (when need-separator
+                               (hermes--insert nil))
+                             (mapc #'hermes--insert values)
+                             (setq need-separator t)))))
+                     (progress-reporter-done reporter)))))
       (dolist (e commands)
         (let ((key (cl-first e))
               (parser (cl-third e)))
@@ -1433,7 +1432,7 @@ With prefix argument, use the read revision instead of current revision."
                    (funcall done))
                  (nthcdr 3 e))
            'error-callback
-           (lambda (_) (funcall done))))))))
+           done))))))
 
 (defun hermes-read-root-dir ()
   "read root dir"
