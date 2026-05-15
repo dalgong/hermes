@@ -167,6 +167,9 @@
 (cl-defmethod hermes--item-string ((data t))
   (oref data file))
 
+(defvar-local hermes--ewoc nil)
+(put 'hermes--ewoc 'permanent-local t)
+
 (defun hermes--insert (data &optional after)
   (let ((node (if after
                   (ewoc-enter-after hermes--ewoc after data)
@@ -279,7 +282,8 @@
                  (or (hermes--sanitize-filename (oref (oref data parent) file))
                      (oref (oref data parent) file)))
       (when line-num
-        (goto-line line-num)))))
+        (goto-char (point-min))
+        (forward-line (1- line-num))))))
 (cl-defmethod hermes--visit ((data hermes--shelve))
   (hermes--run-hg-command (format "Unshelve %s" (oref data name))
     "unshelve"
@@ -321,7 +325,6 @@
              (if reverse "strip" "graft")
              #'ignore
              "--rev" (oref data rev))))))
-(autoload 'tramp-file-local-name "tramp" )
 (cl-defmethod hermes--apply ((data hermes--file) &optional reverse)
   (let ((parent (oref data parent))
         (file (oref data file)))
@@ -355,7 +358,7 @@
                      (lambda (_)
                        (delete-file temp-file))
                      "--unified" (and reverse "--reverse") "--batch"
-                     "--input" (tramp-file-local-name temp-file)
+                     "--input" (file-local-name temp-file)
                      "--" file)))
                "-c" (oref parent rev)
                file))))))
@@ -372,7 +375,7 @@
         (lambda (_)
           (delete-file temp-file))
         "--unified" (and reverse "--reverse") "--batch"
-        "--input" (tramp-file-local-name temp-file) "--" (oref (oref data parent) file)))))
+        "--input" (file-local-name temp-file) "--" (oref (oref data parent) file)))))
 (cl-defmethod hermes--apply ((data hermes--shelve) &optional reverse)
   (if reverse
       (when (y-or-n-p (format "Delete %s? " (oref data name)))
@@ -389,7 +392,7 @@
         (oref data name)))))
 
 ;; process invocation
-(defvar hermes--async-pending-command-count 0)
+(defvar-local hermes--async-pending-command-count 0)
 (put 'hermes--async-pending-command-count 'permanent-local t)
 
 (defun hermes--async-update-pending (n &optional cmdline)
@@ -404,7 +407,7 @@
                       'font-lock-face 'mode-line-emphasis)))
   (force-mode-line-update))
 
-(defvar hermes--async-command-buffer nil)
+(defvar-local hermes--async-command-buffer nil)
 (put 'hermes--async-command-buffer 'permanent-local t)
 
 (defun hermes--log-command-start (cmdline proc)
@@ -423,9 +426,10 @@
     (set-marker (process-mark proc) (1- (point)))))
 
 (defun hermes--log-command-finish (proc)
-  (when (buffer-live-p (process-get proc 'command-buffer))
-    (with-current-buffer (process-get proc 'command-buffer))
-    (hermes--async-update-pending -1))
+  (let ((command-buffer (process-get proc 'command-buffer)))
+    (when (buffer-live-p command-buffer)
+      (with-current-buffer command-buffer
+        (hermes--async-update-pending -1))))
   (unless (buffer-live-p (process-buffer proc))
     (error "command buffer is not alive!"))
   (with-current-buffer (process-buffer proc)
@@ -551,6 +555,7 @@
 (defvar-local hermes-process-output-mode nil)
 (define-minor-mode hermes-process-output-mode
   "A minor mode for hermes processes."
+  :lighter nil
   (when hermes-process-output-mode
     (buffer-disable-undo)
     (setq buffer-read-only t)))
@@ -607,13 +612,7 @@ If more multiple commands are given, runs them in parallel."
 
 (defun hermes--run-hg-command (name command callback &rest args)
   (declare (indent 1))
-  (apply (if (file-remote-p default-directory)
-             ;; Over tramp, start-file-process seems creating new ssh
-             ;; connection for each command. shell-command runs faster
-             ;; since it runs over the existing connection but
-             ;; sequentially.
-             #'hermes--sync-command
-          #'hermes--async-command)
+  (apply #'hermes--async-command
          name
          (car hermes--hg-commands)
          callback
@@ -638,8 +637,6 @@ If more multiple commands are given, runs them in parallel."
       (narrow-to-region (1+ (pos-eol)) (point-max)))))
 
 ;; printers
-(defvar hermes--ewoc nil)
-(put 'hermes--ewoc 'permanent-local t)
 (defun hermes--filter-children (data)
   (let ((deleted (list data)))
     (ewoc-filter hermes--ewoc
@@ -1125,8 +1122,8 @@ With prefix argument, use the read revision instead of current revision."
                        (ewoc-data node)
                        (eq data (oref (ewoc-data node) parent)))
              (ewoc-invalidate hermes--ewoc node)
-             (setq node (ewoc-next hermes--ewoc node))))))
-  (hermes-goto-next 1))
+             (setq node (ewoc-next hermes--ewoc node)))))
+    (hermes-goto-next 1)))
 
 (defun hermes-unmark-all ()
   "Unmark all files."
@@ -1353,6 +1350,7 @@ With prefix argument, use the read revision instead of current revision."
     (define-key map "c" #'hermes-commit)
     (define-key map "d" #'hermes-show-revision)
     (define-key map "E" #'hermes-ediff)
+    (define-key map "j" #'hermes-goto-revision)
     (define-key map "m" #'hermes-mark-unmark)
     (define-key map "M" #'hermes-resolve)
     (define-key map "u" #'hermes-unmark-all)
@@ -1397,9 +1395,11 @@ With prefix argument, use the read revision instead of current revision."
   "Refresh *hermes* buffer contents."
   (when (eq major-mode 'hermes-mode)
     (let* ((hermes-buffer (current-buffer))
+           (commands (cons `(parent "parent" list "-T" "{node|short}")
+                           hermes-status-items))
            (reporter (make-progress-reporter "Refreshing..."))
            (items nil)
-           (pending-count 1)
+           (pending-count (length commands))
            (done (lambda ()
                    (when (zerop (decf pending-count))
                      (let ((parents (alist-get 'parent items)))
@@ -1419,20 +1419,21 @@ With prefix argument, use the read revision instead of current revision."
                            (mapc #'hermes--insert values)
                            (setq need-separator t)))))
                    (progress-reporter-done reporter))))
-      (dolist (e (cons `(parent "parent" list "-T" "{node|short}")
-                       hermes-status-items))
+      (with-current-buffer hermes-buffer
+        (let (buffer-read-only)
+          (ewoc-filter hermes--ewoc (lambda (_) nil))))
+      (dolist (e commands)
         (let ((key (cl-first e))
               (parser (cl-third e)))
-          (apply #'hermes--run-hg-command nil
+          (process-put
+           (apply #'hermes--run-hg-command nil
                  (cl-second e)
                  (lambda (o)
                    (push (cons key (funcall parser o)) items)
                    (funcall done))
-                 (nthcdr 3 e))))
-      (with-current-buffer hermes-buffer
-        (let (buffer-read-only)
-          (ewoc-filter hermes--ewoc (lambda (_) nil))))
-      (funcall done))))
+                 (nthcdr 3 e))
+           'error-callback
+           (lambda (_) (funcall done))))))))
 
 (defun hermes-read-root-dir ()
   "read root dir"
@@ -1481,7 +1482,6 @@ With prefix argument, use the read revision instead of current revision."
     (let ((default-directory directory))
       (with-current-buffer (or buffer (with-current-buffer
                                           (get-buffer-create (format "*hermes[%s]*" name))
-                                        (setq hermes--async-pending-command-count 0)
                                         (current-buffer)))
         (setq imenu-create-index-function #'hermes-imenu-create-index)
         (display-buffer (current-buffer))
